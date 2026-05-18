@@ -275,21 +275,6 @@ Example timeline lines:
 2026-05-18T09:49:18Z | Workflow ready for PR.
 ```
 
----
-
-## Publishing to GitHub (this repo)
-
-```bash
-git init
-git add .
-git commit -m "Initial commit: agents-mcp-rag multi-agent workflow"
-gh repo create agents-mcp-rag --public --source=. --remote=origin --push
-```
-
-Ensure `appsettings.json` contains no real secrets before pushing.
-
----
-
 ## License
 
 Add your license here (e.g. MIT) if you open-source this repository.
