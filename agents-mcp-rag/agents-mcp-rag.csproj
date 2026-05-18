@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <RootNamespace>agents_mcp_rag</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <NoWarn>$(NoWarn);SKEXP0001;SKEXP0050</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="LangChain" Version="0.17.1" />
+      <PackageReference Include="Microsoft.SemanticKernel" Version="1.76.0" />
+      <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.76.0" />
+      <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+      <PackageReference Include="ModelContextProtocol.Core" Version="1.3.0" />
+    </ItemGroup>
+
+</Project>

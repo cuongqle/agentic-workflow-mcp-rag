@@ -1,0 +1,79 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+artifacts/
+publish/
+
+# .NET
+project.lock.json
+project.fragment.lock.json
+*.user
+*.userosscache
+*.suo
+*.cache
+*.dll
+*.exe
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+
+# NuGet
+*.nuget.props
+*.nuget.targets
+.nuget/
+
+# Test / coverage
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+TestResults/
+
+# IDE — Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.rsuser
+*.sln.docstates
+*.DotSettings.user
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Secrets & local config (keep appsettings.json with placeholders or use example file)
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+**/secrets.json
+.env
+.env.*
+!.env.example
+
+# Workflow output / repo cache
+**/repo-cache/
+**/workflow-artifacts/
+
+# Node (MCP GitHub server via npx)
+node_modules/
