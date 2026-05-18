@@ -1200,3 +1200,4 @@ sealed class WorkflowOrchestrator
         bool RequireInheritanceClause,
         IReadOnlyList<string> RequiredBaseTokens);
 }
+
