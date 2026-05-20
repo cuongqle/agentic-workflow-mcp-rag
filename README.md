@@ -234,7 +234,13 @@ agents-mcp-rag/
     ├── Orchestration/
     │   └── WorkflowOrchestrator.cs
     ├── Agents/                    # Architecture, Backend, Frontend, Audit, Recovery, Build
-    ├── Infrastructure/            # RAG, applier, MCP, git, compliance helpers
+    ├── Infrastructure/
+    │   ├── Rag/                   # Index, context composer, repo scanner
+    │   ├── CodeApply/             # File applier, exemplars, contract guards
+    │   ├── Compliance/            # Layer conventions, tests, DI wiring, build classifier
+    │   ├── Git/                   # Git commands, GitHub MCP, repo resolver
+    │   ├── Kernel/                # Semantic Kernel factory
+    │   └── Artifacts/             # Workflow output writer
     └── Models/
         └── WorkflowModels.cs
 ```
