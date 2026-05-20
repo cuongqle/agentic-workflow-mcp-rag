@@ -14,7 +14,8 @@ static class WorkflowFindingRules
 
     public static bool IsAutomatedComplianceFinding(AgentFinding finding)
     {
-        return finding.Message.StartsWith("Missing unit test for ", StringComparison.OrdinalIgnoreCase)
+        return finding.Message.StartsWith("Missing DI registration for ", StringComparison.OrdinalIgnoreCase)
+               || finding.Message.StartsWith("Missing unit test for ", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Missing repository interface for ", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Interface ", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Duplicate index file detected", StringComparison.OrdinalIgnoreCase)

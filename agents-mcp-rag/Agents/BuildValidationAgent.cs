@@ -28,6 +28,7 @@ sealed class BuildValidationAgent : IWorkflowAgent
 
         var fullBuild = RunBuild(state.RepoPath, buildTarget);
         bool productionPassed = ValidateProductionProjects(state.RepoPath, out var productionFailures);
+        var testRun = RunTests(state.RepoPath, buildTarget);
 
         var findings = new List<AgentFinding>(fullBuild.Findings);
         if (!productionPassed)
@@ -41,6 +42,17 @@ sealed class BuildValidationAgent : IWorkflowAgent
             }
         }
 
+        if (testRun.Ran && testRun.ExitCode != 0)
+        {
+            foreach (var testFinding in testRun.Findings)
+            {
+                if (!findings.Any(existing => existing.Message.Equals(testFinding.Message, StringComparison.Ordinal)))
+                {
+                    findings.Add(testFinding);
+                }
+            }
+        }
+
         string summary = fullBuild.ExitCode == 0
             ? $"Build validation passed for {NormalizePath(buildTarget)}."
             : $"Build validation failed for {NormalizePath(buildTarget)}.";
@@ -50,13 +62,95 @@ sealed class BuildValidationAgent : IWorkflowAgent
             summary += " Production projects compile; remaining failures are test-project only.";
         }
 
+        if (testRun.Ran)
+        {
+            summary += testRun.ExitCode == 0
+                ? " All automated tests passed (dotnet test)."
+                : " Automated tests failed (dotnet test).";
+        }
+
         return Task.FromResult(new AgentResult
         {
             AgentName = Name,
             Summary = summary,
             ProductionBuildPassed = productionPassed,
+            TestsPassed = testRun.Ran ? testRun.ExitCode == 0 : null,
             Findings = findings
         });
+    }
+
+    private static (bool Ran, int ExitCode, List<AgentFinding> Findings) RunTests(string repoPath, string buildTarget)
+    {
+        if (!HasTestProjects(repoPath))
+        {
+            return (false, 0, new List<AgentFinding>());
+        }
+
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"test \"{buildTarget}\" --nologo --no-build",
+                WorkingDirectory = repoPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+
+        process.Start();
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        var findings = new List<AgentFinding>();
+        if (process.ExitCode != 0)
+        {
+            findings.AddRange(ExtractTestFailures(stdout, stderr));
+            if (findings.Count == 0)
+            {
+                findings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = "Automated tests failed (dotnet test); inspect test output for details."
+                });
+            }
+        }
+
+        return (true, process.ExitCode, findings);
+    }
+
+    private static bool HasTestProjects(string repoPath)
+    {
+        return Directory
+            .EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
+            .Any(path => BuildFailureClassifier.IsTestProjectPath(path));
+    }
+
+    private static List<AgentFinding> ExtractTestFailures(string stdout, string stderr)
+    {
+        var findings = new List<AgentFinding>();
+        var lines = $"{stdout}\n{stderr}"
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains("Failed!", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("Test Run Failed", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains(": error ", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("Failed ", StringComparison.OrdinalIgnoreCase))
+            .Take(20)
+            .ToList();
+
+        foreach (var line in lines)
+        {
+            findings.Add(new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = $"Test failure: {line.Trim()}"
+            });
+        }
+
+        return findings;
     }
 
     private static (int ExitCode, List<AgentFinding> Findings) RunBuild(string repoPath, string buildTarget)

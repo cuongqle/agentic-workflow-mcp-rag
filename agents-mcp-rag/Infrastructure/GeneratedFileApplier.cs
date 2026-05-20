@@ -867,30 +867,57 @@ static class GeneratedFileApplier
 
     private static void AddInterfaceMethods(string content, Dictionary<string, HashSet<string>> map, bool overwrite = false)
     {
-        var interfaceMatches = Regex.Matches(content, @"interface\s+(I[A-Za-z0-9_]+)");
-        foreach (Match ifaceMatch in interfaceMatches)
+        foreach (Match ifaceMatch in Regex.Matches(content, @"\binterface\s+(I[A-Za-z0-9_]*)\b"))
         {
-            if (ifaceMatch.Groups.Count < 2)
-            {
-                continue;
-            }
-
             string iface = ifaceMatch.Groups[1].Value;
             if (overwrite || !map.ContainsKey(iface))
             {
                 map[iface] = new HashSet<string>(StringComparer.Ordinal);
             }
 
-            foreach (Match methodMatch in Regex.Matches(content, @"\b([A-Za-z_][A-Za-z0-9_]*)\s*\("))
+            string body = ExtractInterfaceBody(content, ifaceMatch.Index);
+            foreach (Match methodMatch in Regex.Matches(body, @"^\s*(?:[\w<>\[\],\s\?]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*;", RegexOptions.Multiline))
+            {
+                map[iface].Add(methodMatch.Groups[1].Value);
+            }
+
+            foreach (Match methodMatch in Regex.Matches(body, @"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*;", RegexOptions.Multiline))
             {
                 string methodName = methodMatch.Groups[1].Value;
-                if (methodName is "if" or "for" or "while" or "switch" or "catch" or "return" or "new")
+                if (methodName is not ("get" or "set"))
                 {
-                    continue;
+                    map[iface].Add(methodName);
                 }
-                map[iface].Add(methodName);
             }
         }
+    }
+
+    private static string ExtractInterfaceBody(string content, int interfaceIndex)
+    {
+        int braceStart = content.IndexOf('{', interfaceIndex);
+        if (braceStart < 0)
+        {
+            return string.Empty;
+        }
+
+        int depth = 0;
+        for (int i = braceStart; i < content.Length; i++)
+        {
+            if (content[i] == '{')
+            {
+                depth++;
+            }
+            else if (content[i] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return content[braceStart..(i + 1)];
+                }
+            }
+        }
+
+        return content[braceStart..];
     }
 
     private readonly record struct CanonicalRoots(

@@ -8,6 +8,7 @@ static class RepositoryComplianceValidator
         var findings = ValidateRepositoryContracts(state);
         findings.AddRange(ValidatePathConventions(state));
         findings.AddRange(TestCoverageAuditor.ValidateMissingTests(state));
+        findings.AddRange(DependencyWiringAuditor.ValidateMissingWiring(state));
         return findings;
     }
 

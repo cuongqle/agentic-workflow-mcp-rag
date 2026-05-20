@@ -62,7 +62,8 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Secrets & local config (keep appsettings.json with placeholders or use example file)
+# Secrets & local config — copy appsettings.example.json to appsettings.json locally
+agents-mcp-rag/appsettings.json
 appsettings.Development.json
 appsettings.Local.json
 appsettings.*.local.json

@@ -1,92 +1,157 @@
 namespace agents_mcp_rag.Infrastructure;
 
+internal sealed record TestConvention(
+    string TestDirectory,
+    string ProductionFileSuffix,
+    int ExemplarCount);
+
 internal static class TestCoverageAuditor
 {
     internal static List<AgentFinding> ValidateMissingTests(WorkflowState state)
     {
         var findings = new List<AgentFinding>();
-        string? testsDir = DetectRepositoryTestsDirectory(state.RepoPath);
-        if (string.IsNullOrWhiteSpace(testsDir))
+        var conventions = DiscoverTestConventions(state.RepoPath);
+        if (conventions.Count == 0)
         {
             return findings;
         }
 
-        if (!HasRepositoryTestConvention(state.RepoPath, testsDir))
-        {
-            return findings;
-        }
-
-        var proposedFiles = GetAllProposedFiles(state);
         var proposedPaths = new HashSet<string>(
-            proposedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
+            GetAllProposedFiles(state).Select(f => f.RelativePath.Replace('\\', '/')),
             StringComparer.OrdinalIgnoreCase);
 
-        var entitiesToValidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var repoImplPath in proposedPaths.Where(IsRepositoryImplementationPath))
+        foreach (var convention in conventions)
         {
-            string? entity = ExtractRepositoryEntityName(repoImplPath);
-            if (!string.IsNullOrWhiteSpace(entity))
-            {
-                entitiesToValidate.Add(entity);
-            }
-        }
+            var productionPaths = proposedPaths
+                .Where(p => MatchesProductionSuffix(p, convention.ProductionFileSuffix))
+                .ToList();
 
-        foreach (string entity in entitiesToValidate)
-        {
-            if (state.DeferredTestEntities.Contains(entity))
+            foreach (var path in productionPaths)
             {
-                continue;
-            }
+                string? subjectBaseName = ExtractProductionBaseName(path, convention.ProductionFileSuffix);
+                if (string.IsNullOrWhiteSpace(subjectBaseName))
+                {
+                    continue;
+                }
 
-            if (!RepositoryImplementationExists(state.RepoPath, entity))
-            {
-                continue;
-            }
+                if (state.DeferredTestEntities.Contains(subjectBaseName))
+                {
+                    continue;
+                }
 
-            TryAddMissingTestFinding(state, testsDir, entity, findings);
+                if (!ProductionFileExists(state.RepoPath, subjectBaseName, convention.ProductionFileSuffix))
+                {
+                    continue;
+                }
+
+                TryAddMissingTestFinding(state, convention, subjectBaseName, findings);
+            }
         }
 
         return findings;
     }
 
-    internal static string? GetRepositoryTestsDirectory(string repoPath)
+    internal static IReadOnlyList<TestConvention> DiscoverTestConventions(string repoPath)
     {
-        return DetectRepositoryTestsDirectory(repoPath);
+        var conventions = new Dictionary<string, TestConvention>(StringComparer.OrdinalIgnoreCase);
+        foreach (var testFile in EnumerateTestFiles(repoPath))
+        {
+            string testDir = Path.GetDirectoryName(testFile.RelativePath)?.Replace('\\', '/') ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(testDir))
+            {
+                continue;
+            }
+
+            string? productionBaseName = ExtractSubjectBaseNameFromTestFile(testFile.FileName);
+            if (string.IsNullOrWhiteSpace(productionBaseName))
+            {
+                continue;
+            }
+
+            string productionFileName = productionBaseName + ".cs";
+            if (!ProductionFileExistsInRepo(repoPath, productionFileName, productionBaseName))
+            {
+                continue;
+            }
+
+            string suffix = InferProductionSuffix(productionFileName);
+            string key = $"{testDir}::{suffix}";
+            if (!conventions.TryGetValue(key, out var convention))
+            {
+                conventions[key] = new TestConvention(testDir, suffix, 1);
+            }
+            else
+            {
+                conventions[key] = convention with { ExemplarCount = convention.ExemplarCount + 1 };
+            }
+        }
+
+        return conventions.Values
+            .Where(c => c.ExemplarCount >= 1)
+            .OrderByDescending(c => c.ExemplarCount)
+            .ThenBy(c => c.TestDirectory, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
-    internal static string? BuildExpectedRepositoryTestPath(string repoPath, string entityName)
+    internal static string? GetRepositoryTestsDirectory(string repoPath)
     {
-        string? testsDir = DetectRepositoryTestsDirectory(repoPath);
-        if (string.IsNullOrWhiteSpace(testsDir))
+        var conventions = DiscoverTestConventions(repoPath);
+        return conventions
+            .FirstOrDefault(c => c.ProductionFileSuffix.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase))
+            ?.TestDirectory
+            ?? conventions.FirstOrDefault()?.TestDirectory;
+    }
+
+    internal static string? GetTestsDirectory(string repoPath)
+    {
+        return DiscoverTestConventions(repoPath).FirstOrDefault()?.TestDirectory;
+    }
+
+    internal static string? BuildExpectedTestPath(string repoPath, string productionBaseName)
+    {
+        var conventions = DiscoverTestConventions(repoPath);
+        var convention = conventions.FirstOrDefault(c =>
+            productionBaseName.EndsWith(
+                Path.GetFileNameWithoutExtension(c.ProductionFileSuffix),
+                StringComparison.Ordinal))
+            ?? conventions.FirstOrDefault();
+
+        if (convention is null)
         {
             return null;
         }
 
-        return $"{testsDir}/{entityName}RepositoryTests.cs";
+        return $"{convention.TestDirectory}/{productionBaseName}Tests.cs";
+    }
+
+    internal static string? BuildExpectedRepositoryTestPath(string repoPath, string entityName)
+    {
+        return BuildExpectedTestPath(repoPath, $"{entityName}Repository");
     }
 
     private static void TryAddMissingTestFinding(
         WorkflowState state,
-        string testsDir,
-        string entity,
+        TestConvention convention,
+        string productionBaseName,
         List<AgentFinding> findings)
     {
-        if (HasRepositoryTest(state, testsDir, entity))
+        if (HasMatchingTest(state, convention.TestDirectory, productionBaseName))
         {
             return;
         }
 
-        string expectedPath = $"{testsDir}/{entity}RepositoryTests.cs";
+        string expectedPath = $"{convention.TestDirectory}/{productionBaseName}Tests.cs";
+        string layer = DescribeLayer(convention.ProductionFileSuffix);
         findings.Add(new AgentFinding
         {
             Severity = FindingSeverity.High,
-            Message = $"Missing unit test for {entity} repository: expected {expectedPath} following existing RepositoryTest conventions."
+            Message = $"Missing unit test for {productionBaseName} ({layer}): expected {expectedPath} following existing *Tests.cs conventions."
         });
     }
 
-    private static bool HasRepositoryTest(WorkflowState state, string testsDir, string entity)
+    private static bool HasMatchingTest(WorkflowState state, string testsDir, string productionBaseName)
     {
-        string expectedFileName = $"{entity}RepositoryTests.cs";
+        string expectedFileName = $"{productionBaseName}Tests.cs";
         var proposedFiles = GetAllProposedFiles(state);
         if (proposedFiles.Any(file => Path.GetFileName(file.RelativePath)
                 .Equals(expectedFileName, StringComparison.OrdinalIgnoreCase)))
@@ -109,55 +174,126 @@ internal static class TestCoverageAuditor
                 .Contains(testsDir, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool HasRepositoryTestConvention(string repoPath, string testsDir)
+    private static bool ProductionFileExists(string repoPath, string productionBaseName, string productionSuffix)
     {
-        string testsAbsolutePath = Path.Combine(repoPath, testsDir.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(testsAbsolutePath))
+        string fileName = productionBaseName + ".cs";
+        return Directory
+            .EnumerateFiles(repoPath, fileName, SearchOption.AllDirectories)
+            .Any(path => !IsTestArtifactPath(ToRelativePath(repoPath, path))
+                        && MatchesProductionSuffix(ToRelativePath(repoPath, path), productionSuffix));
+    }
+
+    private static bool ProductionFileExistsInRepo(string repoPath, string productionFileName, string productionBaseName)
+    {
+        return Directory
+            .EnumerateFiles(repoPath, productionFileName, SearchOption.AllDirectories)
+            .Any(path => !IsTestArtifactPath(ToRelativePath(repoPath, path))
+                        && Path.GetFileNameWithoutExtension(path)
+                            .Equals(productionBaseName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool MatchesProductionSuffix(string relativePath, string productionSuffix)
+    {
+        string fileName = Path.GetFileName(relativePath);
+        if (!fileName.EndsWith(productionSuffix, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        return Directory
-            .EnumerateFiles(testsAbsolutePath, "*RepositoryTests.cs", SearchOption.TopDirectoryOnly)
-            .Any();
+        if (productionSuffix.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
+            && fileName.StartsWith('I'))
+        {
+            return false;
+        }
+
+        return !fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase)
+               && !IsTestArtifactPath(relativePath);
     }
 
-    private static string? DetectRepositoryTestsDirectory(string repoPath)
+    private static string? ExtractProductionBaseName(string relativePath, string productionSuffix)
     {
-        return Directory
-            .EnumerateDirectories(repoPath, "RepositoryTest", SearchOption.AllDirectories)
-            .Select(path => ToRelativePath(repoPath, path))
-            .Where(relative => relative.Contains(".UnitTest/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains("UnitTest/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault();
-    }
-
-    private static bool RepositoryImplementationExists(string repoPath, string entity)
-    {
-        string expectedFileName = $"{entity}Repository.cs";
-        return Directory
-            .EnumerateFiles(repoPath, expectedFileName, SearchOption.AllDirectories)
-            .Any(path => IsRepositoryImplementationPath(ToRelativePath(repoPath, path)));
-    }
-
-    private static bool IsRepositoryImplementationPath(string path)
-    {
-        string fileName = Path.GetFileName(path);
-        return fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-               && !fileName.StartsWith('I');
-    }
-
-    private static string? ExtractRepositoryEntityName(string repositoryPath)
-    {
-        string fileName = Path.GetFileName(repositoryPath);
-        if (!fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase))
+        string fileName = Path.GetFileName(relativePath);
+        if (!fileName.EndsWith(productionSuffix, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        string entity = fileName[..^"Repository.cs".Length];
-        return string.IsNullOrWhiteSpace(entity) ? null : entity;
+        return Path.GetFileNameWithoutExtension(fileName);
+    }
+
+    private static string? ExtractSubjectBaseNameFromTestFile(string testFileName)
+    {
+        if (!testFileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string baseName = Path.GetFileNameWithoutExtension(testFileName);
+        if (baseName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase))
+        {
+            return baseName[..^"Tests".Length];
+        }
+
+        return null;
+    }
+
+    private static string InferProductionSuffix(string productionFileName)
+    {
+        if (productionFileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Repository.cs";
+        }
+
+        if (productionFileName.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Service.cs";
+        }
+
+        if (productionFileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Controller.cs";
+        }
+
+        return Path.GetExtension(productionFileName).Length > 0
+            ? Path.GetFileName(productionFileName)
+            : productionFileName;
+    }
+
+    private static string DescribeLayer(string productionSuffix)
+    {
+        return productionSuffix switch
+        {
+            "Repository.cs" => "repository",
+            "Service.cs" => "service",
+            "Controller.cs" => "controller",
+            _ => "component"
+        };
+    }
+
+    private static IEnumerable<(string RelativePath, string FileName)> EnumerateTestFiles(string repoPath)
+    {
+        foreach (var absolute in Directory.EnumerateFiles(repoPath, "*Tests.cs", SearchOption.AllDirectories))
+        {
+            string normalized = absolute.Replace('\\', '/');
+            if (normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string relative = ToRelativePath(repoPath, absolute);
+            if (!IsTestArtifactPath(relative))
+            {
+                continue;
+            }
+
+            yield return (relative, Path.GetFileName(relative));
+        }
+    }
+
+    private static bool IsTestArtifactPath(string relativePath)
+    {
+        return BuildFailureClassifier.IsTestArtifactPath(relativePath);
     }
 
     private static List<GeneratedFile> GetAllProposedFiles(WorkflowState state)

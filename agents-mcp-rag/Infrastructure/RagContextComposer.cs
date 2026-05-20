@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using agents_mcp_rag.Infrastructure;
 
 static class RagContextComposer
 {
@@ -114,6 +115,13 @@ static class RagContextComposer
         AppendRepositoryConventions(sb, repoPath);
         AppendRepositoryImplementationConventions(sb, repoPath);
         AppendRepositoryUsingConventions(sb, repoPath);
+        CodeExemplarContext.AppendDiscoveredExemplars(sb, repoPath, taskPrompt);
+        string? wiringContext = DependencyWiringAuditor.BuildRegistrationContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(wiringContext))
+        {
+            sb.AppendLine();
+            sb.AppendLine(wiringContext);
+        }
         AppendCriticalRepositoryContract(sb, repoPath, taskPrompt, entityName);
         AppendExpectedPaths(sb, repoPath, entityName);
 
@@ -559,11 +567,13 @@ static class RagContextComposer
     {
         try
         {
-            var lines = File.ReadLines(path).Take(30).ToArray();
+            int maxLines = 50;
+            int maxChars = 1200;
+            var lines = File.ReadLines(path).Take(maxLines).ToArray();
             var snippet = string.Join('\n', lines);
-            if (snippet.Length > 450)
+            if (snippet.Length > maxChars)
             {
-                snippet = snippet[..450];
+                snippet = snippet[..maxChars];
             }
 
             return $"  Snippet:\n{Indent(snippet, "    ")}";

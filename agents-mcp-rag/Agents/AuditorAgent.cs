@@ -12,6 +12,7 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
     protected override string BuildPrompt(WorkflowState state)
     {
         string testCoverageRules = BuildTestCoverageRules(state);
+        string buildStatus = BuildBuildValidationRules(state);
 
         return $"""
             You are the auditor agent.
@@ -35,8 +36,12 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
 
             {testCoverageRules}
 
+            {buildStatus}
+
             Return findings with severity labels: blocker/high/medium/low.
-            Flag missing repository unit tests as high severity when a new *Repository.cs is introduced without a matching *RepositoryTests.cs in the existing RepositoryTest folder.
+            Flag missing unit tests as high severity when new production code is introduced without a matching *Tests.cs file in the same test folders and naming style already used in this repository (repository, service, controller, domain, or other layers—discover from exemplars, not hard-coded names).
+            Treat failing or unrun tests as release blockers when the solution includes test projects.
+            Flag missing DI/bootstrap registration as high severity when a new interface is consumed (constructor injection, Resolve, etc.) but not registered alongside sibling types in existing composition roots.
             """;
     }
 
@@ -52,17 +57,49 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
 
     private static string BuildTestCoverageRules(WorkflowState state)
     {
-        string? testsDir = TestCoverageAuditor.GetRepositoryTestsDirectory(state.RepoPath);
-        if (string.IsNullOrWhiteSpace(testsDir))
+        var conventions = TestCoverageAuditor.DiscoverTestConventions(state.RepoPath);
+        if (conventions.Count == 0)
         {
-            return "Test coverage rules: no RepositoryTest convention detected in target repository.";
+            return "Test coverage rules: no *Tests.cs convention detected in target repository.";
         }
 
+        var lines = conventions
+            .Select(c => $"- {c.TestDirectory}: *{Path.GetFileNameWithoutExtension(c.ProductionFileSuffix)} → {{Name}}Tests.cs ({c.ExemplarCount} exemplar(s))")
+            .ToList();
+
         return $"""
-            Test coverage rules (deterministic):
-            - For every new <Entity>Repository.cs, require <Entity>RepositoryTests.cs under {testsDir}.
-            - Mirror existing MSTest patterns ([TestClass], [TestMethod], bootstrap wiring) from sibling repository tests.
-            - Treat missing repository tests as release blockers when RepositoryTest examples already exist.
+            Test coverage rules (discovered from repository):
+            {string.Join('\n', lines)}
+            - For each new production file that matches a discovered layer suffix, require a sibling test file named <ProductionBaseName>Tests.cs under the same test folder.
+            - Mirror existing test framework patterns (e.g. MSTest/xUnit/NUnit) from exemplar *Tests.cs files.
+            - Treat missing tests as high severity when exemplars already exist for that layer.
+            """;
+    }
+
+    private static string BuildBuildValidationRules(WorkflowState state)
+    {
+        if (state.BuildValidation is null)
+        {
+            return "Build/test validation: not run yet.";
+        }
+
+        bool? testsPassed = state.BuildValidation.TestsPassed;
+        string testsLine = testsPassed switch
+        {
+            true => "Automated tests: passed (dotnet test).",
+            false => "Automated tests: FAILED—treat as blocker/high until all tests pass.",
+            _ => "Automated tests: not executed (no test projects detected or skipped)."
+        };
+
+        string buildLine = state.BuildValidation.ProductionBuildPassed == true
+            ? "Production build: passed."
+            : "Production build: failed or not verified.";
+
+        return $"""
+            Build/test validation (deterministic):
+            - {buildLine}
+            - {testsLine}
+            - Summary: {state.BuildValidation.Summary}
             """;
     }
 

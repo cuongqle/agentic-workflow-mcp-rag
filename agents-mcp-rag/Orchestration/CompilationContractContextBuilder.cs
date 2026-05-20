@@ -15,6 +15,18 @@ static class CompilationContractContextBuilder
 
         AppendRepositoryTestExemplarContext(repoPath, allowedFiles, buildFindings, contextLines);
 
+        string exemplarContext = CodeExemplarContext.BuildForCompilationFix(repoPath, allowedFiles);
+        if (!string.IsNullOrWhiteSpace(exemplarContext))
+        {
+            contextLines.Add(exemplarContext);
+        }
+
+        string? wiringContext = DependencyWiringAuditor.BuildRegistrationContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(wiringContext))
+        {
+            contextLines.Add(wiringContext);
+        }
+
         foreach (var relative in allowedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).Take(24))
         {
             string absolute = Path.Combine(repoPath, relative.Replace('/', Path.DirectorySeparatorChar));

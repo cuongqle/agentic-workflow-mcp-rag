@@ -38,6 +38,7 @@ sealed class AgentResult
     public List<GeneratedFile> ProposedFiles { get; init; } = new();
     public List<AgentFinding> Findings { get; init; } = new();
     public bool? ProductionBuildPassed { get; init; }
+    public bool? TestsPassed { get; init; }
 }
 
 sealed class GeneratedFile

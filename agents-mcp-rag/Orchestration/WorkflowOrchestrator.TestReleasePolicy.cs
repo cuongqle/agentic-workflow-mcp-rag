@@ -28,12 +28,17 @@ sealed partial class WorkflowOrchestrator
         {
             rollbackChanges.Remove(change.RelativePath);
             string fileName = Path.GetFileName(change.RelativePath);
-            if (fileName.EndsWith("RepositoryTests.cs", StringComparison.OrdinalIgnoreCase))
+            if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
             {
-                string entity = fileName[..^"RepositoryTests.cs".Length];
-                if (!string.IsNullOrWhiteSpace(entity))
+                string subjectBaseName = Path.GetFileNameWithoutExtension(fileName);
+                if (subjectBaseName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase))
                 {
-                    state.DeferredTestEntities.Add(entity);
+                    subjectBaseName = subjectBaseName[..^"Tests".Length];
+                }
+
+                if (!string.IsNullOrWhiteSpace(subjectBaseName))
+                {
+                    state.DeferredTestEntities.Add(subjectBaseName);
                 }
             }
         }
