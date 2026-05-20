@@ -39,7 +39,7 @@ internal static class BootstrapRegistrationScope
         sb.AppendLine("- Do NOT return bootstrap/composition-root .cs files from agents; do not put Add* lines in Reset/Init or other methods.");
         sb.AppendLine(
             "- Workflow appends only interface+implementation pairs both present in this run's proposed outputs; "
-            + "never register types already wired in the discovered registration block.");
+            + "never remove or replace lines already in the discovered registration block.");
         if (scope.SampleRegistrationLines.Count > 0)
         {
             sb.AppendLine("- Mirror sibling registration lines:");

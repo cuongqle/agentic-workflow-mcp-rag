@@ -18,13 +18,14 @@ internal static class CompositionRootMerger
         out string? reason,
         IReadOnlySet<string>? workflowProposedPaths = null)
     {
-        string sanitizedExisting = SanitizeBootstrapContent(existingContent, workflowProposedPaths);
+        string sanitizedExisting = SanitizeBootstrapContent(existingContent);
         mergedContent = sanitizedExisting;
         reason = null;
         BootstrapRegistrationScope.BootstrapScope? scope = BootstrapRegistrationScope.DiscoverFromContent(sanitizedExisting, string.Empty);
 
         var newLines = ExtractRegistrationLines(proposedContent, scope?.CollectionVariable)
-            .Where(line => DependencyWiringAuditor.IsAllowedRegistrationLine(line, workflowProposedPaths))
+            .Where(line => workflowProposedPaths is null
+                           || DependencyWiringAuditor.IsAllowedNewRegistrationLine(line, workflowProposedPaths))
             .Where(line => !sanitizedExisting.Contains(line.Trim(), StringComparison.Ordinal))
             .ToList();
 
@@ -43,7 +44,7 @@ internal static class CompositionRootMerger
             return false;
         }
 
-        mergedContent = SanitizeBootstrapContent(mergedContent, workflowProposedPaths);
+        mergedContent = SanitizeBootstrapContent(mergedContent);
 
         if (!PassesBootstrapSyntaxChecks(mergedContent, out reason))
         {
@@ -53,10 +54,8 @@ internal static class CompositionRootMerger
         return CodeExemplarContext.TryValidate(mergedContent, out reason);
     }
 
-    internal static string SanitizeBootstrapContent(string content, IReadOnlySet<string>? workflowProposedPaths = null) =>
-        DependencyWiringAuditor.SanitizeBootstrapRegistrations(
-            RemoveOrphanRegistrationLines(content),
-            workflowProposedPaths);
+    internal static string SanitizeBootstrapContent(string content) =>
+        DependencyWiringAuditor.SanitizeBootstrapRegistrations(RemoveOrphanRegistrationLines(content));
 
     internal static bool PassesBootstrapSyntaxChecks(string content, out string? reason)
     {

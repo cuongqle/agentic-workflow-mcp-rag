@@ -124,7 +124,7 @@ static class GeneratedFileApplier
             applied.Add(autoApplied);
         }
 
-        foreach (string repaired in RepairCompositionRootFiles(state.RepoPath, workflowProposedPaths))
+        foreach (string repaired in RepairCompositionRootFiles(state.RepoPath))
         {
             applied.Add(repaired);
         }
@@ -139,9 +139,7 @@ static class GeneratedFileApplier
         return Task.FromResult(new ApplyResult(applied, rejected, appliedChanges));
     }
 
-    private static IEnumerable<string> RepairCompositionRootFiles(
-        string repoPath,
-        IReadOnlySet<string> workflowProposedPaths)
+    private static IEnumerable<string> RepairCompositionRootFiles(string repoPath)
     {
         foreach (string path in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
         {
@@ -158,7 +156,7 @@ static class GeneratedFileApplier
             }
 
             string original = File.ReadAllText(path);
-            string sanitized = CompositionRootMerger.SanitizeBootstrapContent(original, workflowProposedPaths);
+            string sanitized = CompositionRootMerger.SanitizeBootstrapContent(original);
             if (!sanitized.Equals(original, StringComparison.Ordinal)
                 && CompositionRootMerger.PassesBootstrapSyntaxChecks(sanitized, out _))
             {

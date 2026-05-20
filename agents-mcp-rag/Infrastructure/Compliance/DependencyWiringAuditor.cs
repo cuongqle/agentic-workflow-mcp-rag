@@ -161,6 +161,7 @@ internal static class DependencyWiringAuditor
             "DI registration rules:",
             "- Do NOT return bootstrap/composition-root .cs files in agent output (workflow merges registration lines automatically).",
             "- Append registrations only for interface+implementation pairs both introduced in this workflow's proposed files (I{Name} + {Name}).",
+            "- Never remove or replace existing registration lines in bootstrap/composition-root files.",
             "- Do not register interfaces already wired in bootstrap/composition-root files or protected by repository contracts.",
             "- PRESERVE every existing registration line exactly (factory lambdas, singleton factories, and current Add* patterns).",
             "- Each using directive must end with ';' only — never mix namespace braces into using lines."
@@ -250,7 +251,8 @@ internal static class DependencyWiringAuditor
         return true;
     }
 
-    internal static bool IsAllowedRegistrationLine(string line, IReadOnlySet<string>? workflowProposedPaths)
+    /// <summary>Filters lines proposed for merge — only workflow-new pairs may be added.</summary>
+    internal static bool IsAllowedNewRegistrationLine(string line, IReadOnlySet<string> workflowProposedPaths)
     {
         Match match = RegistrationPairRegex.Match(line);
         if (!match.Success)
@@ -260,22 +262,35 @@ internal static class DependencyWiringAuditor
 
         string iface = match.Groups[1].Value;
         string impl = match.Groups[2].Value;
-        if (workflowProposedPaths is null)
-        {
-            return !PreExistingContractGuard.IsProtectedInterfaceName(iface)
-                   && TryGetImplementationTypeName(iface, out string expectedImpl)
-                   && expectedImpl.Equals(impl, StringComparison.Ordinal);
-        }
-
         return IsWorkflowIntroducedRegistrationPair(iface, impl, workflowProposedPaths);
     }
 
-    internal static string SanitizeBootstrapRegistrations(string content, IReadOnlySet<string>? workflowProposedPaths = null)
+    /// <summary>Removes only invalid registration lines; never strips pre-existing bootstrap wiring.</summary>
+    internal static bool ShouldRemoveInvalidRegistrationLine(string line)
+    {
+        Match match = RegistrationPairRegex.Match(line);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        string iface = match.Groups[1].Value;
+        string impl = match.Groups[2].Value;
+        if (PreExistingContractGuard.IsProtectedInterfaceName(iface))
+        {
+            return true;
+        }
+
+        return !TryGetImplementationTypeName(iface, out string expectedImpl)
+               || !expectedImpl.Equals(impl, StringComparison.Ordinal);
+    }
+
+    internal static string SanitizeBootstrapRegistrations(string content)
     {
         var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
         for (int i = 0; i < lines.Count; i++)
         {
-            if (!IsAllowedRegistrationLine(lines[i], workflowProposedPaths))
+            if (ShouldRemoveInvalidRegistrationLine(lines[i]))
             {
                 lines[i] = string.Empty;
             }
