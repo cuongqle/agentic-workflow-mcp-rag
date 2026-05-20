@@ -39,7 +39,9 @@ Follow layer contracts and path conventions from unified RAG context.
 Use the same project paths, naming, and inheritance patterns as exemplar files in the same layer.
 Implementation must be concrete (no TODO/placeholder comments) with real method bodies where the exemplars include them.
 Mirror the closest exemplar files in RAG context for the same layer (naming, base types, dependencies, and method bodies). Only call members that exist on the types/interfaces you use.
-When introducing new interfaces used by controllers, services, or tests, register them in the same DI/bootstrap files as sibling types (see DI registration exemplars in RAG context).
+When adding a Raven index for a new entity, define the entity properties first and map only those properties in the index (see entity+index pair exemplar in RAG context).
+When introducing new repository interfaces for this task, append one registration line in the existing test/bootstrap file — do not rewrite the file and do not change pre-existing infrastructure wiring (keep InMemory/factory/lambda registrations exactly as in exemplars).
+Do not return bootstrap/DI files unless you are only appending a new interface registration; never replace existing singleton/factory registration lines.
 Include required using directives consistent with sibling files in the same layer.";
     }
 

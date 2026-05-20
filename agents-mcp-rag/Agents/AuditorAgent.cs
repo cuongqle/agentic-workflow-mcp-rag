@@ -41,7 +41,8 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
             Return findings with severity labels: blocker/high/medium/low.
             Flag missing unit tests as high severity when new production code is introduced without a matching *Tests.cs file in the same test folders and naming style already used in this repository (repository, service, controller, domain, or other layers—discover from exemplars, not hard-coded names).
             Treat failing or unrun tests as release blockers when the solution includes test projects.
-            Flag missing DI/bootstrap registration as high severity when a new interface is consumed (constructor injection, Resolve, etc.) but not registered alongside sibling types in existing composition roots.
+            Flag missing DI/bootstrap registration as high severity only for interfaces newly introduced by this workflow (discover from proposed files and exemplar naming, e.g. I*Repository) that are not appended in the test/bootstrap file.
+            Flag rewriting or removing pre-existing DI registrations (InMemory/factory/lambda patterns for infrastructure already wired in the bootstrap file) as high severity — agents must append, not replace.
             """;
     }
 

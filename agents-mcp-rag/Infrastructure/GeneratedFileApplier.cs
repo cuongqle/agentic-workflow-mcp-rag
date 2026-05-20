@@ -590,6 +590,20 @@ static class GeneratedFileApplier
                 // Dynamic layer convention checks below handle broader architectures.
             }
 
+            if (isOverwritingExistingFile
+                && DependencyWiringAuditor.IsCompositionRootPath(relativePath))
+            {
+                string existingPath = Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(existingPath)
+                    && !DependencyWiringAuditor.TryValidateCompositionRootPreservation(
+                        File.ReadAllText(existingPath),
+                        trimmed,
+                        out reason))
+                {
+                    return false;
+                }
+            }
+
             if (!ValidateDynamicLayerConventions(relativePath, trimmed, conventions, out reason))
             {
                 return false;

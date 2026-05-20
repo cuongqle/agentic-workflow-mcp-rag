@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using agents_mcp_rag.Infrastructure;
 using Microsoft.SemanticKernel;
 
 abstract class LlmWorkflowAgentBase : IWorkflowAgent
@@ -22,7 +23,8 @@ abstract class LlmWorkflowAgentBase : IWorkflowAgent
         List<GeneratedFile> generatedFiles = new();
         try
         {
-            var response = await _kernel.InvokePromptAsync(BuildPrompt(state), cancellationToken: cancellationToken);
+            string prompt = PromptTemplateEscaper.EscapeLiteralHandlebars(BuildPrompt(state));
+            var response = await _kernel.InvokePromptAsync(prompt, cancellationToken: cancellationToken);
             string raw = response.ToString();
             if (TryParseStructuredResponse(raw, out string parsedSummary, out List<GeneratedFile> parsedFiles))
             {

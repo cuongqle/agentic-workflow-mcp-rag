@@ -47,6 +47,16 @@ static class CodeExemplarContext
             }
 
             AppendFileExcerpt(sb, repoPath, exemplar, $"similar to {target}");
+
+            if (Path.GetFileName(target).EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                string entityName = Path.GetFileNameWithoutExtension(target).Replace("Index", string.Empty, StringComparison.Ordinal);
+                string? entityExemplar = FindClosestExemplar(repoPath, $"Entities/{entityName}.cs");
+                if (!string.IsNullOrWhiteSpace(entityExemplar) && added.Add(entityExemplar))
+                {
+                    AppendFileExcerpt(sb, repoPath, entityExemplar, $"entity paired with {target}");
+                }
+            }
         }
 
         return sb.Length > 80 ? sb.ToString() : string.Empty;

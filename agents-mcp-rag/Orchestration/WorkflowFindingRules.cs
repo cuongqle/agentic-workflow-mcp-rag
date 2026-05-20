@@ -15,6 +15,8 @@ static class WorkflowFindingRules
     public static bool IsAutomatedComplianceFinding(AgentFinding finding)
     {
         return finding.Message.StartsWith("Missing DI registration for ", StringComparison.OrdinalIgnoreCase)
+               || finding.Message.StartsWith("Composition root must keep existing registration", StringComparison.OrdinalIgnoreCase)
+               || finding.Message.StartsWith("Test bootstrap must not replace InMemory", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Missing unit test for ", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Missing repository interface for ", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Interface ", StringComparison.OrdinalIgnoreCase)

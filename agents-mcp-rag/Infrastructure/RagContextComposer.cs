@@ -123,6 +123,7 @@ static class RagContextComposer
             sb.AppendLine(wiringContext);
         }
         AppendCriticalRepositoryContract(sb, repoPath, taskPrompt, entityName);
+        AppendEntityIndexPairExemplar(sb, repoPath, entityName);
         AppendExpectedPaths(sb, repoPath, entityName);
 
         sb.AppendLine("Required generated file set for new entity:");
@@ -416,6 +417,39 @@ static class RagContextComposer
         {
             sb.AppendLine($"- {directive}");
         }
+    }
+
+    private static void AppendEntityIndexPairExemplar(StringBuilder sb, string repoPath, string entityName)
+    {
+        string? employeeEntity = Directory
+            .EnumerateFiles(repoPath, "Employee.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => path.Contains("/Entities/", StringComparison.OrdinalIgnoreCase));
+        string? employeeIndex = Directory
+            .EnumerateFiles(repoPath, "EmployeeIndex.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => path.Contains("/Indexes/", StringComparison.OrdinalIgnoreCase)
+                                || path.Contains("/Index/", StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(employeeEntity) || string.IsNullOrWhiteSpace(employeeIndex))
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"Entity + Raven index must stay in sync (mirror Employee → {entityName}):");
+        sb.AppendLine("- Define all properties on the entity class first.");
+        sb.AppendLine("- Index Map may only reference properties that exist on that entity.");
+        sb.AppendLine();
+        sb.AppendLine("Exemplar entity:");
+        sb.AppendLine(ReadExcerpt(employeeEntity, 1200));
+        sb.AppendLine();
+        sb.AppendLine("Exemplar index:");
+        sb.AppendLine(ReadExcerpt(employeeIndex, 1200));
+    }
+
+    private static string ReadExcerpt(string absolutePath, int maxChars)
+    {
+        string content = File.ReadAllText(absolutePath);
+        return content.Length > maxChars ? content[..maxChars] + "\n// [truncated]" : content;
     }
 
     private static void AppendCriticalRepositoryContract(StringBuilder sb, string repoPath, string taskPrompt, string entityName)

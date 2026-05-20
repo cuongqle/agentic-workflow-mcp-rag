@@ -245,7 +245,10 @@ static class CompilationFixFileResolver
         {
             symbols.Add(match.Groups[1].Value);
         }
-        foreach (Match match in Regex.Matches(message, @"'([A-Za-z_][A-Za-z0-9_]*)' does not contain a definition for", RegexOptions.IgnoreCase))
+        foreach (Match match in Regex.Matches(
+                     message,
+                     @"'([A-Za-z_][A-Za-z0-9_]*)'\s+does not contain a definition for\s+'([A-Za-z_][A-Za-z0-9_]*)'",
+                     RegexOptions.IgnoreCase))
         {
             symbols.Add(match.Groups[1].Value);
         }

@@ -14,6 +14,7 @@ static class CompilationContractContextBuilder
         };
 
         AppendRepositoryTestExemplarContext(repoPath, allowedFiles, buildFindings, contextLines);
+        AppendEntityIndexPairContext(repoPath, allowedFiles, buildFindings, contextLines);
 
         string exemplarContext = CodeExemplarContext.BuildForCompilationFix(repoPath, allowedFiles);
         if (!string.IsNullOrWhiteSpace(exemplarContext))
@@ -105,5 +106,68 @@ static class CompilationContractContextBuilder
         contextLines.Add("Repository test exemplar (mirror structure exactly; valid C# only):");
         contextLines.Add($"File: {exemplarRelative}");
         contextLines.Add(exemplarContent);
+    }
+
+    private static void AppendEntityIndexPairContext(
+        string repoPath,
+        IReadOnlyList<string> allowedFiles,
+        IReadOnlyList<AgentFinding>? buildFindings,
+        List<string> contextLines)
+    {
+        var entityNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var relative in allowedFiles)
+        {
+            string fileName = Path.GetFileName(relative);
+            if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                entityNames.Add(Path.GetFileNameWithoutExtension(fileName).Replace("Index", string.Empty, StringComparison.Ordinal));
+            }
+        }
+
+        foreach (var finding in buildFindings ?? Array.Empty<AgentFinding>())
+        {
+            foreach (Match match in Regex.Matches(
+                         finding.Message,
+                         @"'([A-Za-z_][A-Za-z0-9_]*)'\s+does not contain a definition for\s+'([A-Za-z_][A-Za-z0-9_]*)'",
+                         RegexOptions.IgnoreCase))
+            {
+                entityNames.Add(match.Groups[1].Value);
+                contextLines.Add(
+                    $"CS1061 contract: type '{match.Groups[1].Value}' must declare member '{match.Groups[2].Value}' (add property or fix index map to existing members only).");
+            }
+        }
+
+        foreach (string entityName in entityNames.Where(n => n.Length > 1))
+        {
+            string? entityPath = Directory
+                .EnumerateFiles(repoPath, $"{entityName}.cs", SearchOption.AllDirectories)
+                .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                               && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path.Contains("/Entities/", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenBy(path => path.Length)
+                .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(entityPath))
+            {
+                continue;
+            }
+
+            string absolute = Path.Combine(repoPath, entityPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(absolute))
+            {
+                continue;
+            }
+
+            string content = File.ReadAllText(absolute);
+            if (content.Length > 2200)
+            {
+                content = content[..2200] + "\n// [entity truncated]";
+            }
+
+            contextLines.Add($"Authoritative entity model for index/repository code ({entityName}):");
+            contextLines.Add($"File: {entityPath}");
+            contextLines.Add(content);
+        }
     }
 }
