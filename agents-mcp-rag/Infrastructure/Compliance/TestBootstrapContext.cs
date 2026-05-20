@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -28,6 +29,22 @@ internal static class TestBootstrapContext
         @"\b([A-Za-z_][A-Za-z0-9_]*)\.ServiceProvider\.Get(?:Required)?Service\s*<([^>]+)>\s*\(\s*\)",
         RegexOptions.Compiled);
 
+    private static readonly Regex PublicPropertyRegex = new(
+        @"public\s+([\w<>\.?\[\]]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*get",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static readonly Regex NewEntityInitializerRegex = new(
+        @"new\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+        RegexOptions.Compiled);
+
+    private static readonly string[] TemporalTypeNames =
+    [
+        "DateTime",
+        "DateTimeOffset",
+        "DateOnly",
+        "TimeOnly"
+    ];
+
     private static readonly string[] BootstrapPathTokens =
     {
         "Bootstrap",
@@ -47,6 +64,18 @@ internal static class TestBootstrapContext
 
         var sb = new StringBuilder();
         sb.AppendLine("Test bootstrap resolution (use public API only — mirror exemplar Setup lines):");
+        string? diScope = BootstrapRegistrationScope.BuildContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(diScope))
+        {
+            sb.AppendLine(diScope);
+        }
+
+        string? packageContext = ProjectPackageAuditor.BuildTestPackageContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(packageContext))
+        {
+            sb.AppendLine(packageContext);
+        }
+
         sb.AppendLine($"- Bootstrap type: {bootstrap.ClassName} ({bootstrap.Namespace})");
         if (bootstrap.PublicMethods.Count > 0)
         {
@@ -74,7 +103,108 @@ internal static class TestBootstrapContext
                 $"- Resolve dependencies via {bootstrap.ClassName}.{bootstrap.ResolveMethod}<T>() (never via private ServiceProvider).");
         }
 
+        string? propertyContext = BuildEntityPropertyContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(propertyContext))
+        {
+            sb.AppendLine(propertyContext);
+        }
+
         return sb.ToString();
+    }
+
+    internal static string? BuildEntityPropertyContext(string repoPath)
+    {
+        var catalog = BuildEntityPropertyCatalog(repoPath);
+        if (catalog.Count == 0)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Entity/model property types for tests (use these CLR types — do not assign or compare string literals to non-string properties):");
+        foreach (var (typeName, properties) in catalog.OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
+        {
+            string props = string.Join(", ", properties.Select(p => $"{p.Key}: {p.Value}"));
+            sb.AppendLine($"- {typeName}: {props}");
+        }
+
+        string? temporalPattern = DiscoverTemporalLiteralPattern(repoPath);
+        if (!string.IsNullOrWhiteSpace(temporalPattern))
+        {
+            sb.AppendLine($"- Temporal literals in sibling *Tests.cs: {temporalPattern}");
+        }
+
+        return sb.ToString();
+    }
+
+    internal static string NormalizeTestLiteralTypes(string content, string repoPath)
+    {
+        var catalog = BuildEntityPropertyCatalog(repoPath);
+        if (catalog.Count == 0)
+        {
+            return content;
+        }
+
+        var referencedTypes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in NewEntityInitializerRegex.Matches(content))
+        {
+            referencedTypes.Add(match.Groups[1].Value);
+        }
+
+        foreach (string typeName in referencedTypes)
+        {
+            if (!catalog.TryGetValue(typeName, out var properties))
+            {
+                continue;
+            }
+
+            foreach (var (propertyName, propertyType) in properties)
+            {
+                if (!IsTemporalType(propertyType))
+                {
+                    continue;
+                }
+
+                content = NormalizeTemporalAssignments(content, propertyName, propertyType);
+                content = NormalizeTemporalComparisons(content, propertyName, propertyType);
+                content = NormalizeTemporalAssertEquals(content, propertyName, propertyType);
+            }
+        }
+
+        return EnsureGlobalizationUsing(content);
+    }
+
+    internal static bool TryValidateTestLiteralTypes(string content, string repoPath, out string reason)
+    {
+        reason = string.Empty;
+        var catalog = BuildEntityPropertyCatalog(repoPath);
+        foreach (var (typeName, properties) in catalog)
+        {
+            if (!content.Contains(typeName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var (propertyName, propertyType) in properties)
+            {
+                if (!IsTemporalType(propertyType))
+                {
+                    continue;
+                }
+
+                if (HasStringLiteralAssignment(content, propertyName)
+                    || HasStringLiteralMemberComparison(content, propertyName)
+                    || HasStringLiteralAssertEquals(content, propertyName))
+                {
+                    reason =
+                        $"Test uses string literals for {typeName}.{propertyName} ({propertyType}). "
+                        + $"Use {DescribeTemporalLiteralPattern(propertyType, repoPath)} instead of quoted strings.";
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     internal static string NormalizeResolutionAccess(string content, string repoPath)
@@ -352,6 +482,174 @@ internal static class TestBootstrapContext
         return referencedTypes.Contains(className)
             ? null
             : null;
+    }
+
+    private static Dictionary<string, Dictionary<string, string>> BuildEntityPropertyCatalog(string repoPath)
+    {
+        var catalog = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        foreach (string absolute in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
+        {
+            if (absolute.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || absolute.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string relative = Path.GetRelativePath(repoPath, absolute).Replace('\\', '/');
+            if (!relative.Contains("Entit", StringComparison.OrdinalIgnoreCase)
+                && !relative.Contains("/Models/", StringComparison.OrdinalIgnoreCase)
+                && !relative.Contains("/Model/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string content = File.ReadAllText(absolute);
+            foreach (Match classMatch in Regex.Matches(content, @"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b"))
+            {
+                string typeName = classMatch.Groups[1].Value;
+                if (!catalog.ContainsKey(typeName))
+                {
+                    catalog[typeName] = new Dictionary<string, string>(StringComparer.Ordinal);
+                }
+
+                foreach (Match prop in PublicPropertyRegex.Matches(content))
+                {
+                    catalog[typeName][prop.Groups[2].Value] = prop.Groups[1].Value.Trim();
+                }
+            }
+        }
+
+        return catalog;
+    }
+
+    private static string? DiscoverTemporalLiteralPattern(string repoPath)
+    {
+        foreach (string absolute in Directory.EnumerateFiles(repoPath, "*Tests.cs", SearchOption.AllDirectories))
+        {
+            string content = File.ReadAllText(absolute);
+            if (content.Contains("DateTime.UtcNow", StringComparison.Ordinal))
+            {
+                return "DateTime.UtcNow / DateTime.Parse(..., CultureInfo.InvariantCulture)";
+            }
+
+            if (content.Contains("DateTime.Parse", StringComparison.Ordinal))
+            {
+                return "DateTime.Parse(..., CultureInfo.InvariantCulture)";
+            }
+
+            if (content.Contains("DateTimeOffset.", StringComparison.Ordinal))
+            {
+                return "DateTimeOffset.Parse(..., CultureInfo.InvariantCulture)";
+            }
+        }
+
+        return "DateTime.Parse(..., CultureInfo.InvariantCulture)";
+    }
+
+    private static string DescribeTemporalLiteralPattern(string propertyType, string repoPath) =>
+        DiscoverTemporalLiteralPattern(repoPath) ?? BuildParseExpression(propertyType, "value") ?? propertyType;
+
+    private static bool IsTemporalType(string propertyType)
+    {
+        string core = propertyType.TrimEnd('?');
+        return TemporalTypeNames.Contains(core, StringComparer.Ordinal);
+    }
+
+    private static string NormalizeTemporalAssignments(string content, string propertyName, string propertyType)
+    {
+        string? parseExpr = BuildParseExpression(propertyType, "$1");
+        if (parseExpr is null)
+        {
+            return content;
+        }
+
+        return Regex.Replace(
+            content,
+            $@"\b{Regex.Escape(propertyName)}\s*=\s*""([^""]+)""",
+            $"{propertyName} = {parseExpr}",
+            RegexOptions.None);
+    }
+
+    private static string NormalizeTemporalComparisons(string content, string propertyName, string propertyType)
+    {
+        string? parseExpr = BuildParseExpression(propertyType, "$2");
+        if (parseExpr is null)
+        {
+            return content;
+        }
+
+        return Regex.Replace(
+            content,
+            $@"\.{Regex.Escape(propertyName)}\s*==\s*""([^""]+)""",
+            $".{propertyName} == {parseExpr}",
+            RegexOptions.None);
+    }
+
+    private static string NormalizeTemporalAssertEquals(string content, string propertyName, string propertyType)
+    {
+        string? parseExpr = BuildParseExpression(propertyType, "$1");
+        if (parseExpr is null)
+        {
+            return content;
+        }
+
+        return Regex.Replace(
+            content,
+            $@"Assert\.AreEqual\s*\(\s*""([^""]+)""\s*,\s*([^,)]+?\.{Regex.Escape(propertyName)})\s*\)",
+            $"Assert.AreEqual({parseExpr}, $2)",
+            RegexOptions.None);
+    }
+
+    private static bool HasStringLiteralAssignment(string content, string propertyName) =>
+        Regex.IsMatch(content, $@"\b{Regex.Escape(propertyName)}\s*=\s*""[^""]+""");
+
+    private static bool HasStringLiteralMemberComparison(string content, string propertyName) =>
+        Regex.IsMatch(content, $@"\.{Regex.Escape(propertyName)}\s*==\s*""[^""]+""");
+
+    private static bool HasStringLiteralAssertEquals(string content, string propertyName) =>
+        Regex.IsMatch(content, $@"Assert\.AreEqual\s*\(\s*""[^""]+""\s*,\s*[^,)]+?\.{Regex.Escape(propertyName)}\s*\)");
+
+    private static string? BuildParseExpression(string propertyType, string literalGroup)
+    {
+        string core = propertyType.TrimEnd('?');
+        return core switch
+        {
+            "DateTime" => $"DateTime.Parse(\"{literalGroup}\", CultureInfo.InvariantCulture)",
+            "DateTimeOffset" => $"DateTimeOffset.Parse(\"{literalGroup}\", CultureInfo.InvariantCulture)",
+            "DateOnly" => $"DateOnly.Parse(\"{literalGroup}\", CultureInfo.InvariantCulture)",
+            "TimeOnly" => $"TimeOnly.Parse(\"{literalGroup}\", CultureInfo.InvariantCulture)",
+            _ => null
+        };
+    }
+
+    private static string EnsureGlobalizationUsing(string content)
+    {
+        if (!content.Contains("CultureInfo.InvariantCulture", StringComparison.Ordinal))
+        {
+            return content;
+        }
+
+        if (content.Contains("using System.Globalization", StringComparison.Ordinal))
+        {
+            return content;
+        }
+
+        int insertAt = 0;
+        var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
+        for (int i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].StartsWith("using ", StringComparison.Ordinal))
+            {
+                insertAt = i + 1;
+            }
+            else if (insertAt > 0)
+            {
+                break;
+            }
+        }
+
+        lines.Insert(insertAt, "using System.Globalization;");
+        return string.Join(Environment.NewLine, lines);
     }
 
     private sealed record BootstrapInfo(

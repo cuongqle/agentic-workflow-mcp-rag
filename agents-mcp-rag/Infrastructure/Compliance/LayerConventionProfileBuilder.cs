@@ -254,6 +254,41 @@ sealed class LayerConventionProfiles
 
     internal static string BuildExpectedImplementationFileName(string subjectBase, LayerConventionProfile profile) =>
         $"{subjectBase}{profile.RoleName}.cs";
+
+    internal static IEnumerable<string> ResolveRequiredConstructorParamTypes(
+        string repoPath,
+        string subjectBase,
+        LayerConventionProfile profile)
+    {
+        if (!profile.RoleName.Equals("Controller", StringComparison.Ordinal))
+        {
+            return profile.RequiredConstructorParamTypes;
+        }
+
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            $"I{subjectBase}Repository"
+        };
+
+        string? exemplarPath = Directory
+            .EnumerateFiles(repoPath, $"{subjectBase}Controller.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                                 && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(exemplarPath))
+        {
+            string exemplarContent = File.ReadAllText(exemplarPath);
+            foreach (string paramType in profile.RequiredConstructorParamTypes)
+            {
+                if (exemplarContent.Contains(paramType, StringComparison.Ordinal))
+                {
+                    required.Add(paramType);
+                }
+            }
+        }
+
+        return required;
+    }
 }
 
 sealed record LayerConventionProfile(

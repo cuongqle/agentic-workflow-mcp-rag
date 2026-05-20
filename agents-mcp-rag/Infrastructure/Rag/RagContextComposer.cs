@@ -130,7 +130,23 @@ static class RagContextComposer
             sb.AppendLine(bootstrapContext);
         }
         AppendCriticalRepositoryContract(sb, repoPath, taskPrompt, entityName);
-        AppendEntityIndexPairExemplar(sb, repoPath, entityName);
+        AppendRepositoryQueryPatterns(sb, repoPath);
+        AppendInheritedLayerMembers(sb, repoPath, "Repository");
+        AppendControllerPatterns(sb, repoPath);
+        AppendInheritedLayerMembers(sb, repoPath, "Controller");
+        string? interfaceImplRules = InterfaceImplementationGuard.BuildRagContext(repoPath, taskPrompt);
+        if (!string.IsNullOrWhiteSpace(interfaceImplRules))
+        {
+            sb.AppendLine();
+            sb.AppendLine(interfaceImplRules);
+        }
+
+        string? typeMemberRules = TypeMemberConsistencyGuard.BuildRagContext(repoPath, taskPrompt);
+        if (!string.IsNullOrWhiteSpace(typeMemberRules))
+        {
+            sb.AppendLine();
+            sb.AppendLine(typeMemberRules);
+        }
         AppendExpectedPaths(sb, repoPath, entityName);
 
         sb.AppendLine("Required generated file set for new entity:");
@@ -426,39 +442,6 @@ static class RagContextComposer
         }
     }
 
-    private static void AppendEntityIndexPairExemplar(StringBuilder sb, string repoPath, string entityName)
-    {
-        string? employeeEntity = Directory
-            .EnumerateFiles(repoPath, "Employee.cs", SearchOption.AllDirectories)
-            .FirstOrDefault(path => path.Contains("/Entities/", StringComparison.OrdinalIgnoreCase));
-        string? employeeIndex = Directory
-            .EnumerateFiles(repoPath, "EmployeeIndex.cs", SearchOption.AllDirectories)
-            .FirstOrDefault(path => path.Contains("/Indexes/", StringComparison.OrdinalIgnoreCase)
-                                || path.Contains("/Index/", StringComparison.OrdinalIgnoreCase));
-
-        if (string.IsNullOrWhiteSpace(employeeEntity) || string.IsNullOrWhiteSpace(employeeIndex))
-        {
-            return;
-        }
-
-        sb.AppendLine();
-        sb.AppendLine($"Entity + Raven index must stay in sync (mirror Employee → {entityName}):");
-        sb.AppendLine("- Define all properties on the entity class first.");
-        sb.AppendLine("- Index Map may only reference properties that exist on that entity.");
-        sb.AppendLine();
-        sb.AppendLine("Exemplar entity:");
-        sb.AppendLine(ReadExcerpt(employeeEntity, 1200));
-        sb.AppendLine();
-        sb.AppendLine("Exemplar index:");
-        sb.AppendLine(ReadExcerpt(employeeIndex, 1200));
-    }
-
-    private static string ReadExcerpt(string absolutePath, int maxChars)
-    {
-        string content = File.ReadAllText(absolutePath);
-        return content.Length > maxChars ? content[..maxChars] + "\n// [truncated]" : content;
-    }
-
     private static void AppendCriticalRepositoryContract(StringBuilder sb, string repoPath, string taskPrompt, string entityName)
     {
         var implementationFiles = Directory.GetFiles(repoPath, "*Repository.cs", SearchOption.AllDirectories)
@@ -506,6 +489,101 @@ static class RagContextComposer
         sb.AppendLine($"- Required new implementation: public class {entityName}Repository: Repository<{entityName}>, I{entityName}Repository");
         sb.AppendLine($"- Required new constructor: public {entityName}Repository(IDbStore dbStore) : base(dbStore)");
         sb.AppendLine("- Never generate repository class with only ': I{Entity}Repository' and missing Repository<{Entity}> base.");
+    }
+
+    private static void AppendInheritedLayerMembers(StringBuilder sb, string repoPath, string roleName)
+    {
+        string? exemplarPath = Directory
+            .GetFiles(repoPath, $"*{roleName}.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetFileName(path).StartsWith('I')
+                        && !Path.GetFileName(path).Equals($"{roleName}.cs", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path.Length)
+            .FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(exemplarPath))
+        {
+            return;
+        }
+
+        string content = File.ReadAllText(exemplarPath);
+        string? memberContext = ClassMemberAccessGuard.BuildBaseTypeContext(repoPath, content);
+        if (string.IsNullOrWhiteSpace(memberContext))
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"{roleName} layer — {memberContext}");
+    }
+
+    private static void AppendControllerPatterns(StringBuilder sb, string repoPath)
+    {
+        string? exemplar = Directory
+            .GetFiles(repoPath, "*Controller.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetFileName(path).Equals("Controller.cs", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(path => File.ReadAllText(path).Contains(".Insert(", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(exemplar))
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Controller conventions:");
+        sb.AppendLine("- Inject only I{Entity}Repository for the controller entity (do not copy unrelated repositories from other controllers).");
+        sb.AppendLine("- Use IRepository<T> members (Insert, GetById, Count, Query) — never invent methods like Insert{Entity}.");
+        sb.AppendLine($"- Persistence exemplar: {Path.GetRelativePath(repoPath, exemplar).Replace('\\', '/')}");
+        foreach (string line in File.ReadAllLines(exemplar).Where(l => l.Contains("Insert(", StringComparison.Ordinal) || l.Contains("Repository(", StringComparison.Ordinal)).Take(4))
+        {
+            sb.AppendLine($"  {line.Trim()}");
+        }
+    }
+
+    private static void AppendRepositoryQueryPatterns(StringBuilder sb, string repoPath)
+    {
+        string? dbStorePath = Directory
+            .EnumerateFiles(repoPath, "IDbStore.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(dbStorePath))
+        {
+            string? signature = File.ReadAllLines(dbStorePath)
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.Contains("Query<", StringComparison.Ordinal) && line.Contains('('));
+            if (!string.IsNullOrWhiteSpace(signature))
+            {
+                sb.AppendLine($"- IDbStore query signature: {signature}");
+            }
+        }
+
+        string? baseRepoPath = Directory
+            .EnumerateFiles(repoPath, "Repository.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => Path.GetFileName(path).Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
+                                 && path.Contains("Repository", StringComparison.OrdinalIgnoreCase)
+                                 && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(baseRepoPath))
+        {
+            foreach (string line in File.ReadAllLines(baseRepoPath))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.Contains("Query(", StringComparison.Ordinal) || trimmed.Contains("SingleSearch(", StringComparison.Ordinal))
+                {
+                    sb.AppendLine($"- Base repository API: {trimmed}");
+                }
+            }
+        }
+
+        string? exemplar = Directory
+            .GetFiles(repoPath, "*Repository.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetFileName(path).StartsWith('I')
+                        && !Path.GetFileName(path).Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(path => File.ReadAllText(path).Contains("typeof(", StringComparison.Ordinal)
+                                   && File.ReadAllText(path).Contains(".Name", StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(exemplar))
+        {
+            sb.AppendLine($"- Index name usage exemplar: {Path.GetRelativePath(repoPath, exemplar).Replace('\\', '/')}");
+            sb.AppendLine("  Pass index name string (e.g. typeof({Entity}Index).Name) to Query/SingleSearch — never DbStore.Query<T>() without indexName.");
+        }
     }
 
     private static string? FindDirectory(string repoPath, string token, string? excludeToken = null)

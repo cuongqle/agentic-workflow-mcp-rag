@@ -199,6 +199,7 @@ These run without the LLM and produce `AgentFinding` entries (High/Blocker can t
 | Path conventions | `ValidatePathConventions` | Controllers, indexes, duplicate index files. |
 | Missing tests | `TestCoverageAuditor` | `*Tests.cs` per discovered layer (repository, service, controller, …). |
 | File quality | `GeneratedFileApplier` | Non-prose, C# shape, layer profiles, interface parity. |
+| Bootstrap DI | `CompositionRootMerger` | Appends `services.Add*` lines only; never rewrites bootstrap `.cs` files. |
 | Test syntax | `CodeExemplarContext.TryValidate` | Balanced braces; rejects `;;` and similar. |
 | Test template | `LayerTestTemplateBuilder` | Clones sibling layer `*Tests.cs` exemplar if LLM output is invalid. |
 

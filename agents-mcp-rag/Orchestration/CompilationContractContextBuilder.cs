@@ -29,7 +29,37 @@ static class CompilationContractContextBuilder
         }
 
         AppendAuthoritativeInfrastructureContracts(repoPath, contextLines);
-        AppendTestBootstrapContext(repoPath, contextLines);
+        AppendRepositoryQueryContract(repoPath, allowedFiles, contextLines);
+        AppendControllerContract(repoPath, allowedFiles, contextLines);
+        AppendInheritedTypeMembers(repoPath, allowedFiles, contextLines);
+        string? interfaceImplContext = InterfaceImplementationGuard.BuildCompilationFixContext(
+            repoPath,
+            buildFindings,
+            allowedFiles);
+        if (!string.IsNullOrWhiteSpace(interfaceImplContext))
+        {
+            contextLines.Add(interfaceImplContext);
+        }
+
+        string? packageContext = ProjectPackageAuditor.BuildTestPackageContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(packageContext))
+        {
+            contextLines.Add(packageContext);
+        }
+
+        foreach (var finding in buildFindings ?? Array.Empty<AgentFinding>())
+        {
+            foreach (Match match in Regex.Matches(
+                         finding.Message,
+                         @"type or namespace name\s+'([A-Za-z_][A-Za-z0-9_]*)'\s+could not be found",
+                         RegexOptions.IgnoreCase))
+            {
+                contextLines.Add(
+                    $"CS0246: missing namespace/type '{match.Groups[1].Value}' — workflow will dotnet add matching NuGet package to test project if mapped; prefer removing unused usings and mirroring exemplar test style.");
+            }
+        }
+
+        AppendTestBootstrapContext(repoPath, allowedFiles, contextLines);
 
         foreach (var relative in allowedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).Take(24))
         {
@@ -137,10 +167,13 @@ static class CompilationContractContextBuilder
         var entityNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var relative in allowedFiles)
         {
-            string fileName = Path.GetFileName(relative);
-            if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
+            if (TypeMemberConsistencyGuard.TryResolveDefinitionType(
+                    repoPath,
+                    relative.Replace('\\', '/'),
+                    proposedDefinitions: null,
+                    out string definitionTypeName))
             {
-                entityNames.Add(Path.GetFileNameWithoutExtension(fileName).Replace("Index", string.Empty, StringComparison.Ordinal));
+                entityNames.Add(definitionTypeName);
             }
         }
 
@@ -151,9 +184,31 @@ static class CompilationContractContextBuilder
                          @"'([A-Za-z_][A-Za-z0-9_]*)'\s+does not contain a definition for\s+'([A-Za-z_][A-Za-z0-9_]*)'",
                          RegexOptions.IgnoreCase))
             {
-                entityNames.Add(match.Groups[1].Value);
+                string typeName = match.Groups[1].Value;
+                string missingMember = match.Groups[2].Value;
+                entityNames.Add(typeName);
+
+                string? targetFile = allowedFiles.FirstOrDefault(path =>
+                    Path.GetFileNameWithoutExtension(path).Equals(typeName, StringComparison.Ordinal));
+                if (!string.IsNullOrWhiteSpace(targetFile))
+                {
+                    string absolute = Path.Combine(repoPath, targetFile.Replace('/', Path.DirectorySeparatorChar));
+                    if (File.Exists(absolute))
+                    {
+                        string? memberContext = ClassMemberAccessGuard.BuildBaseTypeContext(
+                            repoPath,
+                            File.ReadAllText(absolute));
+                        if (!string.IsNullOrWhiteSpace(memberContext))
+                        {
+                            contextLines.Add(
+                                $"CS1061 on {typeName}: '{missingMember}' is not an instance member. {memberContext}");
+                            continue;
+                        }
+                    }
+                }
+
                 contextLines.Add(
-                    $"CS1061 contract: type '{match.Groups[1].Value}' must declare member '{match.Groups[2].Value}' (add property or fix index map to existing members only).");
+                    $"CS1061 contract: type '{typeName}' must declare member '{missingMember}' (add member or use an existing declared/base member).");
             }
         }
 
@@ -185,21 +240,181 @@ static class CompilationContractContextBuilder
                 content = content[..2200] + "\n// [entity truncated]";
             }
 
-            contextLines.Add($"Authoritative entity model for index/repository code ({entityName}):");
+            var declaredMembers = TypeMemberConsistencyGuard.ExtractDeclaredMembersForContext(content);
+            contextLines.Add($"Authoritative definition type for projection consumers ({entityName}):");
             contextLines.Add($"File: {entityPath}");
+            if (declaredMembers.Count > 0)
+            {
+                contextLines.Add(
+                    $"Consumer projections may ONLY reference these members: {string.Join(", ", declaredMembers.OrderBy(p => p, StringComparer.Ordinal))}");
+            }
+
             contextLines.Add(content);
         }
     }
 
-    private static void AppendTestBootstrapContext(string repoPath, List<string> contextLines)
+    private static void AppendTestBootstrapContext(
+        string repoPath,
+        IReadOnlyList<string> allowedFiles,
+        List<string> contextLines)
     {
-        string? bootstrapContext = TestBootstrapContext.BuildContext(repoPath);
-        if (string.IsNullOrWhiteSpace(bootstrapContext))
+        bool hasTestTarget = allowedFiles.Any(path =>
+            Path.GetFileName(path).EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase)
+            || BuildFailureClassifier.IsTestArtifactPath(path));
+        if (!hasTestTarget)
         {
             return;
         }
 
-        contextLines.Add(bootstrapContext);
+        string? bootstrapContext = TestBootstrapContext.BuildContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(bootstrapContext))
+        {
+            contextLines.Add(bootstrapContext);
+        }
+
+        string? targetTest = allowedFiles
+            .FirstOrDefault(path => Path.GetFileName(path).EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(targetTest))
+        {
+            return;
+        }
+
+        string? productionBase = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(
+            Path.GetFileName(targetTest));
+        if (!string.IsNullOrWhiteSpace(productionBase)
+            && LayerTestTemplateBuilder.TryBuildFromExemplar(repoPath, productionBase, out string layerTemplate))
+        {
+            contextLines.Add("Test file template (mirror structure and bootstrap calls exactly):");
+            contextLines.Add(layerTemplate.Length > 2000 ? layerTemplate[..2000] + "\n// [truncated]" : layerTemplate);
+        }
+    }
+
+    private static void AppendRepositoryQueryContract(
+        string repoPath,
+        IReadOnlyList<string> allowedFiles,
+        List<string> contextLines)
+    {
+        bool needsRepositoryContext = allowedFiles.Any(path =>
+            Path.GetFileName(path).EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
+            && !Path.GetFileName(path).Equals("Repository.cs", StringComparison.OrdinalIgnoreCase));
+        if (!needsRepositoryContext)
+        {
+            return;
+        }
+
+        string? baseRepositoryPath = Directory
+            .EnumerateFiles(repoPath, "Repository.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => Path.GetFileName(path).Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
+                                 && path.Contains("Repository", StringComparison.OrdinalIgnoreCase)
+                                 && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(baseRepositoryPath))
+        {
+            string content = File.ReadAllText(baseRepositoryPath);
+            if (content.Length > 1600)
+            {
+                content = content[..1600] + "\n// [truncated]";
+            }
+
+            contextLines.Add("Repository base query contract (use index name string — never call Query<T>() without indexName):");
+            contextLines.Add($"File: {Path.GetRelativePath(repoPath, baseRepositoryPath).Replace('\\', '/')}");
+            contextLines.Add(content);
+        }
+
+        string? exemplarRepo = Directory
+            .GetFiles(repoPath, "*Repository.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetFileName(path).StartsWith('I')
+                        && !Path.GetFileName(path).Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(path => File.ReadAllText(path).Contains("typeof(", StringComparison.Ordinal)
+                                   && File.ReadAllText(path).Contains(".Name", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(exemplarRepo))
+        {
+            return;
+        }
+
+        string exemplarContent = File.ReadAllText(exemplarRepo);
+        if (exemplarContent.Length > 1400)
+        {
+            exemplarContent = exemplarContent[..1400] + "\n// [truncated]";
+        }
+
+        contextLines.Add("Exemplar repository index usage (pass typeof({Entity}Index).Name as indexName):");
+        contextLines.Add($"File: {Path.GetRelativePath(repoPath, exemplarRepo).Replace('\\', '/')}");
+        contextLines.Add(exemplarContent);
+    }
+
+    private static void AppendControllerContract(
+        string repoPath,
+        IReadOnlyList<string> allowedFiles,
+        List<string> contextLines)
+    {
+        bool hasControllerTarget = allowedFiles.Any(path =>
+            Path.GetFileName(path).EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase)
+            && !Path.GetFileName(path).Equals("Controller.cs", StringComparison.OrdinalIgnoreCase));
+        if (!hasControllerTarget)
+        {
+            return;
+        }
+
+        string? repositoryInterfacePath = Directory
+            .EnumerateFiles(repoPath, "IRepository.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(repositoryInterfacePath))
+        {
+            string content = File.ReadAllText(repositoryInterfacePath);
+            if (content.Length > 1200)
+            {
+                content = content[..1200] + "\n// [truncated]";
+            }
+
+            contextLines.Add("Repository interface base contract (controllers must call these members — e.g. Insert(entity), not invented names):");
+            contextLines.Add($"File: {Path.GetRelativePath(repoPath, repositoryInterfacePath).Replace('\\', '/')}");
+            contextLines.Add(content);
+        }
+
+        string? exemplarController = Directory
+            .GetFiles(repoPath, "*Controller.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetFileName(path).Equals("Controller.cs", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(path => File.ReadAllText(path).Contains(".Insert(", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(exemplarController))
+        {
+            return;
+        }
+
+        string exemplarContent = File.ReadAllText(exemplarController);
+        if (exemplarContent.Length > 1400)
+        {
+            exemplarContent = exemplarContent[..1400] + "\n// [truncated]";
+        }
+
+        contextLines.Add("Exemplar controller persistence call (mirror Insert/GetById/Count patterns):");
+        contextLines.Add($"File: {Path.GetRelativePath(repoPath, exemplarController).Replace('\\', '/')}");
+        contextLines.Add(exemplarContent);
+    }
+
+    private static void AppendInheritedTypeMembers(
+        string repoPath,
+        IReadOnlyList<string> allowedFiles,
+        List<string> contextLines)
+    {
+        foreach (string relative in allowedFiles.Where(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).Take(12))
+        {
+            string absolute = Path.Combine(repoPath, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(absolute))
+            {
+                continue;
+            }
+
+            string content = File.ReadAllText(absolute);
+            string? memberContext = ClassMemberAccessGuard.BuildBaseTypeContext(repoPath, content);
+            if (string.IsNullOrWhiteSpace(memberContext))
+            {
+                continue;
+            }
+
+            contextLines.Add(memberContext);
+        }
     }
 
     private static void AppendAuthoritativeInfrastructureContracts(string repoPath, List<string> contextLines)

@@ -74,9 +74,13 @@ Prefer adapting code to existing abstractions instead of assuming extra members 
 If a symbol is missing, either add the proper existing import/namespace or change implementation to use already-defined symbols and patterns.
 When compliance findings mention missing unit tests, create the expected {{ProductionBaseName}}Tests.cs under the discovered test folder for that layer and mirror sibling *Tests.cs structure (framework attributes, usings, namespace, setup/teardown).
 For test compile errors (CS1525/CS1002), rewrite the full test file using the closest *Tests.cs exemplar from contract context; do not emit malformed terminators like ';;' or ',;'.
+For CS0019 (operator cannot be applied to mismatched types), align test literals and assertions with entity property types listed in contract context (e.g. parse temporal values instead of quoted strings).
 For CS0122 (inaccessible member) in tests, use only the public bootstrap API shown in contract context exemplar Setup lines — never access private ServiceProvider or other non-public bootstrap members.
+For CS1061 on index Map (entity missing member), either add the property to the entity class or remove it from the index projection — use only properties listed in authoritative entity contract context.
 When fixing compile errors, copy patterns from the implementation exemplars in contract context; do not invent APIs — use only members visible on interfaces/base classes shown there.
-If compliance findings mention missing DI registration, append one line in the bootstrap/DI file for the new interface only — preserve every existing registration (especially InMemory/factory/lambda infrastructure wiring). Never change registrations for interfaces you did not generate.";
+If compliance findings mention missing DI registration, do NOT return the bootstrap .cs file — omit it from files[] so the workflow can append into the registration scope described in contract context. Never rewrite bootstrap usings or namespace braces.
+Never suggest or add registrations for interfaces already wired in bootstrap exemplars — only new interface+implementation pairs from this task's proposed files.
+For CS0246 missing namespaces in tests, prefer mirroring exemplar *Tests.cs usings; workflow auto-runs dotnet add package when needed. Do not add Moq unless existing tests already use it.";
     }
 
     protected override IReadOnlyList<AgentFinding> BuildFallbackFindings()

@@ -42,6 +42,14 @@ sealed partial class WorkflowOrchestrator
                 state.ComplianceIssues.Add($"Compilation fix rejected '{rejected.RelativePath}': {rejected.Reason}");
             }
 
+            foreach (string packageChange in ProjectPackageAuditor.EnsureMissingPackages(
+                         state.RepoPath,
+                         state.BuildValidation?.Findings,
+                         WorkflowFindingRules.GetAllProposedFiles(state)))
+            {
+                state.AddTimeline($"NuGet restore: {packageChange}");
+            }
+
             state.BuildValidation = await _buildValidationAgent.ExecuteAsync(state, cancellationToken);
             if (state.BuildValidation.Findings.Count == 0)
             {

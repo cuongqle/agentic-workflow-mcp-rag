@@ -11,6 +11,9 @@ static class ContractComplianceValidator
         findings.AddRange(DependencyWiringAuditor.ValidateMissingWiring(state));
         findings.AddRange(ValidateProtectedContractTampering(state));
         findings.AddRange(ValidateTestBootstrapResolution(state));
+        findings.AddRange(ValidateTypeMemberConsistency(state));
+        findings.AddRange(ValidateInterfaceImplementation(state));
+        findings.AddRange(ValidateTestPackageConventions(state));
         return findings;
     }
 
@@ -193,7 +196,7 @@ static class ContractComplianceValidator
             });
         }
 
-        foreach (string paramType in profile.RequiredConstructorParamTypes)
+        foreach (string paramType in LayerConventionProfiles.ResolveRequiredConstructorParamTypes(state.RepoPath, subjectBase, profile))
         {
             if (!implementationContent.Contains(paramType, StringComparison.Ordinal))
             {
@@ -205,6 +208,99 @@ static class ContractComplianceValidator
                 });
             }
         }
+    }
+
+    private static List<AgentFinding> ValidateInterfaceImplementation(WorkflowState state)
+    {
+        var findings = new List<AgentFinding>();
+        var proposed = WorkflowFindingRules.GetAllProposedFiles(state);
+        var catalog = InterfaceImplementationGuard.BuildDirectMemberCatalog(state.RepoPath, proposed);
+
+        foreach (var file in proposed)
+        {
+            if (!file.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string fileName = Path.GetFileName(file.RelativePath);
+            if (fileName.StartsWith('I') || !file.Content.Contains("public class ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!InterfaceImplementationGuard.TryValidate(
+                    state.RepoPath,
+                    file.RelativePath.Replace('\\', '/'),
+                    file.Content,
+                    catalog,
+                    out string reason))
+            {
+                findings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = reason
+                });
+            }
+        }
+
+        return findings;
+    }
+
+    private static List<AgentFinding> ValidateTestPackageConventions(WorkflowState state)
+    {
+        var findings = new List<AgentFinding>();
+        foreach (var file in WorkflowFindingRules.GetAllProposedFiles(state))
+        {
+            if (!ProjectPackageAuditor.TryValidateTestPackages(
+                    state.RepoPath,
+                    file.RelativePath.Replace('\\', '/'),
+                    file.Content,
+                    out string reason))
+            {
+                findings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.Medium,
+                    Message = reason
+                });
+            }
+        }
+
+        return findings;
+    }
+
+    private static List<AgentFinding> ValidateTypeMemberConsistency(WorkflowState state)
+    {
+        var findings = new List<AgentFinding>();
+        var proposed = WorkflowFindingRules.GetAllProposedFiles(state);
+        var proposedDefinitions = TypeMemberConsistencyGuard.BuildProposedTypeDefinitions(proposed);
+
+        foreach (var file in proposed)
+        {
+            if (!TypeMemberConsistencyGuard.IsConsumerRelativePath(
+                    state.RepoPath,
+                    file.RelativePath.Replace('\\', '/'),
+                    proposedDefinitions))
+            {
+                continue;
+            }
+
+            if (!TypeMemberConsistencyGuard.TryValidateConsumerContent(
+                    state.RepoPath,
+                    file.RelativePath.Replace('\\', '/'),
+                    file.Content,
+                    proposedDefinitions,
+                    out string reason))
+            {
+                findings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = reason
+                });
+            }
+        }
+
+        return findings;
     }
 
     private static List<AgentFinding> ValidateTestBootstrapResolution(WorkflowState state)
@@ -223,6 +319,16 @@ static class ContractComplianceValidator
                 {
                     Severity = FindingSeverity.High,
                     Message = reason
+                });
+                continue;
+            }
+
+            if (!TestBootstrapContext.TryValidateTestLiteralTypes(file.Content, state.RepoPath, out string literalReason))
+            {
+                findings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = literalReason
                 });
             }
         }
@@ -291,39 +397,58 @@ static class ContractComplianceValidator
             }
         }
 
-        string? repoIndexesDir = DetectCanonicalDirectoryForFileSuffix(state.RepoPath, "Index.cs", "Indexes")
-                                 ?? DetectCanonicalDirectoryForFileSuffix(state.RepoPath, "Index.cs", "Index");
-        foreach (var file in proposedFiles)
+        foreach (string consumerSuffix in TypeMemberConsistencyGuard.DiscoverConsumerSuffixes(state.RepoPath))
         {
-            string path = file.RelativePath.Replace('\\', '/');
-            string fileName = Path.GetFileName(path);
-            if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrWhiteSpace(repoIndexesDir)
-                && !path.StartsWith(repoIndexesDir + "/", StringComparison.OrdinalIgnoreCase)
-                && !path.Equals(repoIndexesDir, StringComparison.OrdinalIgnoreCase))
+            string filePattern = $"{consumerSuffix}.cs";
+            string? canonicalConsumerDir = DetectCanonicalDirectoryForFileSuffix(
+                                                state.RepoPath,
+                                                filePattern,
+                                                $"{consumerSuffix}es")
+                                            ?? DetectCanonicalDirectoryForFileSuffix(
+                                                state.RepoPath,
+                                                filePattern,
+                                                consumerSuffix);
+
+            foreach (var file in proposedFiles)
             {
-                findings.Add(new AgentFinding
+                string path = file.RelativePath.Replace('\\', '/');
+                string fileName = Path.GetFileName(path);
+                if (!fileName.EndsWith(filePattern, StringComparison.OrdinalIgnoreCase)
+                    || !TypeMemberConsistencyGuard.IsConsumerRelativePath(state.RepoPath, path))
                 {
-                    Severity = FindingSeverity.High,
-                    Message = $"{fileName} should be generated under {repoIndexesDir}, not {path}."
-                });
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(canonicalConsumerDir)
+                    && !path.StartsWith(canonicalConsumerDir + "/", StringComparison.OrdinalIgnoreCase)
+                    && !path.Equals(canonicalConsumerDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    findings.Add(new AgentFinding
+                    {
+                        Severity = FindingSeverity.High,
+                        Message = $"{fileName} should be generated under {canonicalConsumerDir}, not {path}."
+                    });
+                }
             }
         }
 
-        var duplicatedIndexNames = Directory
-            .EnumerateFiles(state.RepoPath, "*Index.cs", SearchOption.AllDirectories)
+        var duplicatedConsumerNames = Directory
+            .EnumerateFiles(state.RepoPath, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
                         && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            .Where(path => TypeMemberConsistencyGuard.IsConsumerRelativePath(
+                state.RepoPath,
+                Path.GetRelativePath(state.RepoPath, path).Replace('\\', '/')))
             .GroupBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
             .Select(group => group.Key);
 
-        foreach (string duplicated in duplicatedIndexNames)
+        foreach (string duplicated in duplicatedConsumerNames)
         {
             findings.Add(new AgentFinding
             {
                 Severity = FindingSeverity.High,
-                Message = $"Duplicate index file detected in multiple folders: {duplicated}. Keep only canonical index path."
+                Message = $"Duplicate consumer file detected in multiple folders: {duplicated}. Keep only canonical consumer path."
             });
         }
 

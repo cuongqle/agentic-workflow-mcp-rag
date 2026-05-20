@@ -20,10 +20,6 @@ internal static class DependencyWiringAuditor
         @"(?:Add(?:Scoped|Singleton|Transient)|RegisterType)\s*<\s*(I[A-Za-z0-9_]+)\s*>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly Regex ResolveRegex = new(
-        @"(?:Resolve|GetRequiredService|GetService)\s*<\s*(I[A-Za-z0-9_]+)\s*>",
-        RegexOptions.Compiled);
-
     internal static List<AgentFinding> ValidateMissingWiring(WorkflowState state)
     {
         var findings = new List<AgentFinding>();
@@ -35,10 +31,10 @@ internal static class DependencyWiringAuditor
         }
 
         var registrationHubs = FindRegistrationHubFiles(repoPath, registeredInterfaces);
-        var requiredInterfaces = CollectWorkflowIntroducedInterfaces(state, repoPath);
-        var proposedPaths = new HashSet<string>(
-            WorkflowFindingRules.GetAllProposedFiles(state).Select(f => f.RelativePath.Replace('\\', '/')),
-            StringComparer.OrdinalIgnoreCase);
+        var proposedPaths = BuildWorkflowProposedPathSet(state);
+        var requiredInterfaces = CollectWorkflowIntroducedInterfaces(
+            WorkflowFindingRules.GetAllProposedFiles(state),
+            proposedPaths);
 
         foreach (string interfaceName in requiredInterfaces)
         {
@@ -58,7 +54,13 @@ internal static class DependencyWiringAuditor
                 : registrationHubs.OrderByDescending(h => h.RegisteredInterfaces.Count).FirstOrDefault();
 
             string hubHint = hub?.RelativePath ?? "an existing DI/bootstrap file in this repository";
-            string suggestedLine = BuildSuggestedRegistrationLine(hub, interfaceName);
+            BootstrapRegistrationScope.BootstrapScope? scope = hub is not null && File.Exists(Path.Combine(repoPath, hub.RelativePath.Replace('/', Path.DirectorySeparatorChar)))
+                ? BootstrapRegistrationScope.DiscoverFromContent(
+                    File.ReadAllText(Path.Combine(repoPath, hub.RelativePath.Replace('/', Path.DirectorySeparatorChar))),
+                    hub.RelativePath)
+                : BootstrapRegistrationScope.DiscoverPrimary(repoPath);
+            string? exemplarLine = hub?.SampleLines.FirstOrDefault(l => RegistrationPairRegex.IsMatch(l));
+            string suggestedLine = BootstrapRegistrationScope.BuildRegistrationLine(scope, interfaceName, exemplarLine);
 
             findings.Add(new AgentFinding
             {
@@ -69,6 +71,81 @@ internal static class DependencyWiringAuditor
         }
 
         return findings;
+    }
+
+    internal static IReadOnlyList<string> ApplyMissingRegistrations(WorkflowState state)
+    {
+        var applied = new List<string>();
+        string repoPath = state.RepoPath;
+        var registeredInterfaces = CollectRegisteredInterfaces(repoPath);
+        if (registeredInterfaces.Count == 0)
+        {
+            return applied;
+        }
+
+        var registrationHubs = FindRegistrationHubFiles(repoPath, registeredInterfaces);
+        var proposedPaths = BuildWorkflowProposedPathSet(state);
+        var requiredInterfaces = CollectWorkflowIntroducedInterfaces(
+            WorkflowFindingRules.GetAllProposedFiles(state),
+            proposedPaths);
+
+        foreach (string interfaceName in requiredInterfaces)
+        {
+            if (registeredInterfaces.Contains(interfaceName))
+            {
+                continue;
+            }
+
+            if (!InterfaceOrImplementationExists(repoPath, interfaceName, proposedPaths))
+            {
+                continue;
+            }
+
+            string? exemplarInterface = FindRegisteredExemplar(interfaceName, registeredInterfaces);
+            RegistrationHub? hub = exemplarInterface is not null
+                ? registrationHubs.FirstOrDefault(h => h.RegisteredInterfaces.Contains(exemplarInterface))
+                : registrationHubs.OrderByDescending(h => h.RegisteredInterfaces.Count).FirstOrDefault(h => IsTestRegistrationHub(h.RelativePath))
+                  ?? registrationHubs.FirstOrDefault();
+
+            if (hub is null)
+            {
+                continue;
+            }
+
+            string hubAbsolute = Path.Combine(repoPath, hub.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(hubAbsolute))
+            {
+                continue;
+            }
+
+            string existing = CompositionRootMerger.SanitizeBootstrapContent(File.ReadAllText(hubAbsolute));
+            BootstrapRegistrationScope.BootstrapScope? scope = BootstrapRegistrationScope.DiscoverFromContent(
+                existing,
+                hub.RelativePath);
+            if (!TryGetImplementationTypeName(interfaceName, out string implementationName)
+                || !IsWorkflowIntroducedRegistrationPair(interfaceName, implementationName, proposedPaths))
+            {
+                continue;
+            }
+
+            string? exemplarLine = hub.SampleLines.FirstOrDefault(l => RegistrationPairRegex.IsMatch(l));
+            string registrationLine = BootstrapRegistrationScope.BuildRegistrationLine(scope, interfaceName, exemplarLine);
+            if (!CompositionRootMerger.TryMergeIntoExisting(
+                    existing,
+                    registrationLine + Environment.NewLine,
+                    out string merged,
+                    out _,
+                    proposedPaths))
+            {
+                continue;
+            }
+
+            File.WriteAllText(hubAbsolute, merged);
+            registeredInterfaces.Add(interfaceName);
+            applied.Add($"{hub.RelativePath}: {registrationLine.Trim()}");
+        }
+
+        return applied;
     }
 
     internal static string? BuildRegistrationContext(string repoPath)
@@ -82,17 +159,25 @@ internal static class DependencyWiringAuditor
         var lines = new List<string>
         {
             "DI registration rules:",
-            "- PRESERVE every existing registration line exactly (factory lambdas, AddSingleton, InMemory types).",
-            "- APPEND only new lines for workflow-introduced interfaces (mirror sibling I*Repository registrations).",
-            "- Never replace pre-existing infrastructure wiring (InMemory/factory/lambda) unless you are generating that interface file."
+            "- Do NOT return bootstrap/composition-root .cs files in agent output (workflow merges registration lines automatically).",
+            "- Append registrations only for interface+implementation pairs both introduced in this workflow's proposed files (I{Name} + {Name}).",
+            "- Do not register interfaces already wired in bootstrap/composition-root files or protected by repository contracts.",
+            "- PRESERVE every existing registration line exactly (factory lambdas, singleton factories, and current Add* patterns).",
+            "- Each using directive must end with ';' only — never mix namespace braces into using lines."
         };
+
+        string? scopeContext = BootstrapRegistrationScope.BuildContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(scopeContext))
+        {
+            lines.Add(scopeContext);
+        }
 
         var testHubs = hubs.Where(h => IsTestRegistrationHub(h.RelativePath)).ToList();
         var otherHubs = hubs.Where(h => !IsTestRegistrationHub(h.RelativePath)).ToList();
 
         if (testHubs.Count > 0)
         {
-            lines.Add("Test bootstrap exemplars (*Test*, Bootstrappers/composition-root paths) — append repository lines; keep InMemory/factory store wiring unchanged:");
+            lines.Add("Test bootstrap exemplars (*Test*, Bootstrappers/composition-root paths) — append new pairs only; keep existing store/factory wiring unchanged:");
             foreach (var hub in testHubs.Take(2))
             {
                 AppendHubLines(lines, hub);
@@ -143,18 +228,124 @@ internal static class DependencyWiringAuditor
             }
         }
 
-        if (existingContent.Contains("InMemory", StringComparison.OrdinalIgnoreCase)
-            && existingContent.Contains("IDbStore", StringComparison.OrdinalIgnoreCase)
-            && RegistrationPairRegex.IsMatch(proposedContent)
-            && Regex.IsMatch(proposedContent, @"Add(?:Scoped|Singleton|Transient)\s*<\s*IDbStore\s*,\s*(?!InMemory)", RegexOptions.IgnoreCase))
+        foreach (string iface in existingInterfaces)
         {
-            reason =
-                "Test bootstrap must not replace InMemory/factory IDbStore registration with a production DbStore/RavenDbStore type.";
-            return false;
+            if (!HasFactoryRegistration(existingContent, iface)
+                || !RegistrationPairRegex.IsMatch(proposedContent))
+            {
+                continue;
+            }
+
+            Match proposedPair = RegistrationPairRegex.Match(proposedContent);
+            if (proposedPair.Success
+                && proposedPair.Groups[1].Value.Equals(iface, StringComparison.Ordinal)
+                && !HasFactoryRegistration(proposedContent, iface))
+            {
+                reason =
+                    $"Composition root must keep factory/lambda registration for {iface}; do not replace with a direct concrete type mapping.";
+                return false;
+            }
         }
 
         return true;
     }
+
+    internal static bool IsAllowedRegistrationLine(string line, IReadOnlySet<string>? workflowProposedPaths)
+    {
+        Match match = RegistrationPairRegex.Match(line);
+        if (!match.Success)
+        {
+            return true;
+        }
+
+        string iface = match.Groups[1].Value;
+        string impl = match.Groups[2].Value;
+        if (workflowProposedPaths is null)
+        {
+            return !PreExistingContractGuard.IsProtectedInterfaceName(iface)
+                   && TryGetImplementationTypeName(iface, out string expectedImpl)
+                   && expectedImpl.Equals(impl, StringComparison.Ordinal);
+        }
+
+        return IsWorkflowIntroducedRegistrationPair(iface, impl, workflowProposedPaths);
+    }
+
+    internal static string SanitizeBootstrapRegistrations(string content, IReadOnlySet<string>? workflowProposedPaths = null)
+    {
+        var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
+        for (int i = 0; i < lines.Count; i++)
+        {
+            if (!IsAllowedRegistrationLine(lines[i], workflowProposedPaths))
+            {
+                lines[i] = string.Empty;
+            }
+        }
+
+        return string.Join(Environment.NewLine, lines.Where(line => line != string.Empty));
+    }
+
+    private static bool HasFactoryRegistration(string content, string interfaceName) =>
+        content.Contains($"<{interfaceName}>", StringComparison.Ordinal)
+        && (content.Contains("=>", StringComparison.Ordinal)
+            || content.Contains("provider =>", StringComparison.OrdinalIgnoreCase)
+            || content.Contains("GetRequiredService", StringComparison.Ordinal));
+
+    private static HashSet<string> CollectWorkflowIntroducedInterfaces(
+        IEnumerable<GeneratedFile> proposedFiles,
+        IReadOnlySet<string> workflowProposedPaths)
+    {
+        var required = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in proposedFiles)
+        {
+            string interfaceName = Path.GetFileNameWithoutExtension(file.RelativePath);
+            if (!file.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || !interfaceName.StartsWith('I')
+                || !TryGetImplementationTypeName(interfaceName, out string implementationName)
+                || !IsWorkflowIntroducedRegistrationPair(interfaceName, implementationName, workflowProposedPaths))
+            {
+                continue;
+            }
+
+            required.Add(interfaceName);
+        }
+
+        return required;
+    }
+
+    private static bool IsWorkflowIntroducedRegistrationPair(
+        string interfaceName,
+        string implementationName,
+        IReadOnlySet<string> workflowProposedPaths)
+    {
+        if (PreExistingContractGuard.IsProtectedInterfaceName(interfaceName))
+        {
+            return false;
+        }
+
+        if (!ProposedContainsType(interfaceName, workflowProposedPaths)
+            || !ProposedContainsType(implementationName, workflowProposedPaths))
+        {
+            return false;
+        }
+
+        return interfaceName.EndsWith(implementationName, StringComparison.Ordinal);
+    }
+
+    private static bool TryGetImplementationTypeName(string interfaceName, out string implementationName)
+    {
+        implementationName = string.Empty;
+        if (!interfaceName.StartsWith('I') || interfaceName.Length < 2)
+        {
+            return false;
+        }
+
+        implementationName = interfaceName[1..];
+        return implementationName.Length > 0;
+    }
+
+    private static bool ProposedContainsType(string typeName, IReadOnlySet<string> workflowProposedPaths) =>
+        workflowProposedPaths.Any(path =>
+            Path.GetFileNameWithoutExtension(path).Equals(typeName, StringComparison.OrdinalIgnoreCase));
 
     private static void AppendHubLines(List<string> lines, RegistrationHub hub)
     {
@@ -165,99 +356,10 @@ internal static class DependencyWiringAuditor
         }
     }
 
-    private static string BuildSuggestedRegistrationLine(RegistrationHub? hub, string interfaceName)
-    {
-        string implementationName = interfaceName.StartsWith('I') && interfaceName.Length > 1
-            ? interfaceName[1..]
-            : interfaceName;
-
-        if (hub is not null && hub.SampleLines.Count > 0)
-        {
-            string? sibling = hub.SampleLines.FirstOrDefault(l => RegistrationPairRegex.IsMatch(l));
-            if (sibling is not null)
-            {
-                Match match = RegistrationPairRegex.Match(sibling);
-                string lifetime = match.Value.Contains("Singleton", StringComparison.OrdinalIgnoreCase) ? "Singleton" : "Scoped";
-                return $"services.Add{lifetime}<{interfaceName}, {implementationName}>();";
-            }
-        }
-
-        return $"services.AddScoped<{interfaceName}, {implementationName}>();";
-    }
-
-    private static HashSet<string> CollectWorkflowIntroducedInterfaces(WorkflowState state, string repoPath)
-    {
-        var required = new HashSet<string>(StringComparer.Ordinal);
-        var proposed = WorkflowFindingRules.GetAllProposedFiles(state);
-        var proposedPaths = new HashSet<string>(
-            proposed.Select(f => f.RelativePath.Replace('\\', '/')),
+    private static HashSet<string> BuildWorkflowProposedPathSet(WorkflowState state) =>
+        new HashSet<string>(
+            WorkflowFindingRules.GetAllProposedFiles(state).Select(f => f.RelativePath.Replace('\\', '/')),
             StringComparer.OrdinalIgnoreCase);
-
-        foreach (var file in proposed)
-        {
-            string name = Path.GetFileName(file.RelativePath);
-            if (name.StartsWith('I') && name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-            {
-                required.Add(Path.GetFileNameWithoutExtension(name));
-            }
-        }
-
-        foreach (var file in proposed)
-        {
-            ExtractInterfaceDependencies(file.Content, required, repoPath, proposedPaths);
-        }
-
-        return required;
-    }
-
-    private static void ExtractInterfaceDependencies(
-        string content,
-        HashSet<string> required,
-        string repoPath,
-        HashSet<string> proposedPaths)
-    {
-        var candidates = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in ResolveRegex.Matches(content))
-        {
-            candidates.Add(match.Groups[1].Value);
-        }
-
-        foreach (Match match in Regex.Matches(
-                     content,
-                     @"\b(I[A-Z][A-Za-z0-9_]*(?:Repository|Service|Controller|Handler|Provider|Manager))\b"))
-        {
-            candidates.Add(match.Groups[1].Value);
-        }
-
-        foreach (string iface in candidates)
-        {
-            if (IsWorkflowIntroducedInterface(repoPath, iface, proposedPaths))
-            {
-                required.Add(iface);
-            }
-        }
-    }
-
-    private static bool IsWorkflowIntroducedInterface(
-        string repoPath,
-        string interfaceName,
-        HashSet<string> proposedPaths)
-    {
-        if (proposedPaths.Any(p =>
-                Path.GetFileNameWithoutExtension(p).Equals(interfaceName, StringComparison.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
-
-        if (!interfaceName.EndsWith("Repository", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        string implName = interfaceName.StartsWith('I') ? interfaceName[1..] : interfaceName;
-        return proposedPaths.Any(p =>
-            Path.GetFileNameWithoutExtension(p).Equals(implName, StringComparison.OrdinalIgnoreCase));
-    }
 
     private static HashSet<string> ExtractRegisteredInterfaceNames(string content)
     {

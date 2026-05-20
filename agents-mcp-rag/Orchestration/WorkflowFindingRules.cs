@@ -28,6 +28,7 @@ static class WorkflowFindingRules
                    && finding.Message.Contains(" interface for ", StringComparison.OrdinalIgnoreCase))
                || finding.Message.StartsWith("Interface ", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Duplicate index file detected", StringComparison.OrdinalIgnoreCase)
+               || finding.Message.Contains("Index map references member", StringComparison.OrdinalIgnoreCase)
                || finding.Message.Contains("should implement I", StringComparison.OrdinalIgnoreCase)
                || finding.Message.Contains("should include", StringComparison.OrdinalIgnoreCase)
                || finding.Message.StartsWith("Rejected generated file ", StringComparison.OrdinalIgnoreCase)
