@@ -43,6 +43,7 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
             Treat failing or unrun tests as release blockers when the solution includes test projects.
             Flag missing DI/bootstrap registration as high severity only for interfaces newly introduced by this workflow (discover from proposed files and exemplar naming, e.g. I*Repository) that are not appended in the test/bootstrap file.
             Flag rewriting or removing pre-existing DI registrations (InMemory/factory/lambda patterns for infrastructure already wired in the bootstrap file) as high severity — agents must append, not replace.
+            Flag any change to pre-existing interface/store contracts (adding SaveChanges, Update, DbContext-style APIs) as blocker — new code must adapt to existing store interfaces only.
             """;
     }
 

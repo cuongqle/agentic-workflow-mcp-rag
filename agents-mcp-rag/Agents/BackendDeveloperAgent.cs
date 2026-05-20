@@ -42,6 +42,7 @@ Mirror the closest exemplar files in RAG context for the same layer (naming, bas
 When adding a Raven index for a new entity, define the entity properties first and map only those properties in the index (see entity+index pair exemplar in RAG context).
 When introducing new repository interfaces for this task, append one registration line in the existing test/bootstrap file — do not rewrite the file and do not change pre-existing infrastructure wiring (keep InMemory/factory/lambda registrations exactly as in exemplars).
 Do not return bootstrap/DI files unless you are only appending a new interface registration; never replace existing singleton/factory registration lines.
+Never modify pre-existing interfaces or store/base implementations. Do not invent SaveChanges/Update/DbContext APIs — use only store members shown in contract context.
 Include required using directives consistent with sibling files in the same layer.";
     }
 

@@ -72,7 +72,7 @@ sealed partial class WorkflowOrchestrator
         }
 
         state.Audit.Findings.RemoveAll(WorkflowFindingRules.IsAutomatedComplianceFinding);
-        var refreshedCompliance = RepositoryComplianceValidator.CollectComplianceFindings(state);
+        var refreshedCompliance = ContractComplianceValidator.CollectComplianceFindings(state);
         refreshedCompliance.AddRange(llmOutputQualityFindings);
         state.Audit.Findings.AddRange(refreshedCompliance);
         if (state.BuildValidation is not null)

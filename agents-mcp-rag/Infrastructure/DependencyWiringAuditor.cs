@@ -92,7 +92,7 @@ internal static class DependencyWiringAuditor
 
         if (testHubs.Count > 0)
         {
-            lines.Add("Test bootstrap exemplars (*Test*, Bootstrappers/HotSpot) — append repository lines; keep InMemory/factory store wiring unchanged:");
+            lines.Add("Test bootstrap exemplars (*Test*, Bootstrappers/composition-root paths) — append repository lines; keep InMemory/factory store wiring unchanged:");
             foreach (var hub in testHubs.Take(2))
             {
                 AppendHubLines(lines, hub);
@@ -114,7 +114,8 @@ internal static class DependencyWiringAuditor
     internal static bool IsCompositionRootPath(string relativePath) =>
         relativePath.Contains("Bootstrappers", StringComparison.OrdinalIgnoreCase)
         || relativePath.Contains("Bootstrapper", StringComparison.OrdinalIgnoreCase)
-        || relativePath.Contains("HotSpot", StringComparison.OrdinalIgnoreCase)
+        || relativePath.Contains("CompositionRoot", StringComparison.OrdinalIgnoreCase)
+        || relativePath.Contains("TestFixture", StringComparison.OrdinalIgnoreCase)
         || relativePath.Contains("Startup", StringComparison.OrdinalIgnoreCase)
         || (relativePath.Contains("Program.cs", StringComparison.OrdinalIgnoreCase)
             && relativePath.Contains("Test", StringComparison.OrdinalIgnoreCase));
@@ -337,7 +338,7 @@ internal static class DependencyWiringAuditor
     private static bool IsTestRegistrationHub(string relativePath) =>
         relativePath.Contains("Test", StringComparison.OrdinalIgnoreCase)
         || relativePath.Contains("Bootstrappers", StringComparison.OrdinalIgnoreCase)
-        || relativePath.Contains("HotSpot", StringComparison.OrdinalIgnoreCase);
+        || relativePath.Contains("CompositionRoot", StringComparison.OrdinalIgnoreCase);
 
     private static bool InterfaceOrImplementationExists(
         string repoPath,

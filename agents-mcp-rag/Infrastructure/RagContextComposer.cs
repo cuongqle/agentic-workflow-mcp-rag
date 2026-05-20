@@ -122,6 +122,13 @@ static class RagContextComposer
             sb.AppendLine();
             sb.AppendLine(wiringContext);
         }
+
+        string? bootstrapContext = TestBootstrapContext.BuildContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(bootstrapContext))
+        {
+            sb.AppendLine();
+            sb.AppendLine(bootstrapContext);
+        }
         AppendCriticalRepositoryContract(sb, repoPath, taskPrompt, entityName);
         AppendEntityIndexPairExemplar(sb, repoPath, entityName);
         AppendExpectedPaths(sb, repoPath, entityName);

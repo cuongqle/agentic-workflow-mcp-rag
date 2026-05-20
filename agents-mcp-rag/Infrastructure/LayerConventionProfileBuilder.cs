@@ -187,27 +187,73 @@ sealed class LayerConventionProfiles
     public LayerConventionProfile? ResolveByPath(string relativePath)
     {
         string fileName = Path.GetFileName(relativePath);
-        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase)
-            && !fileName.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase))
+        foreach (var profile in GetActiveProfiles())
         {
-            return Repository;
-        }
-
-        if (fileName.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase)
-            && !fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase)
-            && !fileName.Equals("Service.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return Service;
-        }
-
-        if (fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return Controller;
+            if (MatchesImplementationFile(fileName, profile))
+            {
+                return profile;
+            }
         }
 
         return null;
     }
+
+    public IEnumerable<LayerConventionProfile> GetActiveProfiles()
+    {
+        if (Repository is not null)
+        {
+            yield return Repository;
+        }
+
+        if (Service is not null)
+        {
+            yield return Service;
+        }
+
+        if (Controller is not null)
+        {
+            yield return Controller;
+        }
+    }
+
+    internal static bool MatchesImplementationFile(string fileName, LayerConventionProfile profile)
+    {
+        if (!fileName.EndsWith(profile.FileSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string roleBaseFile = profile.RoleName + Path.GetExtension(profile.FileSuffix);
+        return !fileName.Equals(roleBaseFile, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string? GetSubjectBaseName(string fileName, LayerConventionProfile profile)
+    {
+        if (!MatchesImplementationFile(fileName, profile))
+        {
+            return null;
+        }
+
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        if (stem.EndsWith(profile.RoleName, StringComparison.OrdinalIgnoreCase)
+            && stem.Length > profile.RoleName.Length)
+        {
+            return stem[..^profile.RoleName.Length];
+        }
+
+        return stem;
+    }
+
+    internal static string BuildExpectedInterfaceFileName(string subjectBase, LayerConventionProfile profile) =>
+        $"I{subjectBase}{profile.RoleName}.cs";
+
+    internal static string BuildExpectedImplementationFileName(string subjectBase, LayerConventionProfile profile) =>
+        $"{subjectBase}{profile.RoleName}.cs";
 }
 
 sealed record LayerConventionProfile(

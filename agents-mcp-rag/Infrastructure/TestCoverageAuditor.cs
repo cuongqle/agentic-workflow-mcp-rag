@@ -221,6 +221,19 @@ internal static class TestCoverageAuditor
         return Path.GetFileNameWithoutExtension(fileName);
     }
 
+    internal static string? ExtractProductionBaseNameFromTestFileName(string testFileName) =>
+        ExtractSubjectBaseNameFromTestFile(testFileName);
+
+    internal static TestConvention? FindConventionForProductionBase(
+        string repoPath,
+        string productionBaseName)
+    {
+        return DiscoverTestConventions(repoPath).FirstOrDefault(c =>
+            productionBaseName.EndsWith(
+                Path.GetFileNameWithoutExtension(c.ProductionFileSuffix),
+                StringComparison.Ordinal));
+    }
+
     private static string? ExtractSubjectBaseNameFromTestFile(string testFileName)
     {
         if (!testFileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))

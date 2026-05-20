@@ -67,12 +67,14 @@ Do not call properties/methods on interface-typed dependencies unless those memb
 If a member access is invalid for an abstraction, refactor to the existing pattern used by sibling classes in the same layer.
 When multiple files participate in a contract (interface + class + caller), update all of them consistently in one response.
 Never introduce or reference new types/interfaces/base classes unless they already exist in the repository or are included in the same response.
+Never modify pre-existing interfaces or infrastructure/store files. Do not add SaveChanges, Update, or EF-style APIs — use only members already declared in authoritative contract context.
 For generic/base constraints, ensure every type argument satisfies required constraints from existing base classes/interfaces.
 Before returning, verify each changed file compiles against the contracts it depends on (interfaces, base classes, generic constraints, namespace imports).
 Prefer adapting code to existing abstractions instead of assuming extra members exist on interfaces.
 If a symbol is missing, either add the proper existing import/namespace or change implementation to use already-defined symbols and patterns.
 When compliance findings mention missing unit tests, create the expected {{ProductionBaseName}}Tests.cs under the discovered test folder for that layer and mirror sibling *Tests.cs structure (framework attributes, usings, namespace, setup/teardown).
 For test compile errors (CS1525/CS1002), rewrite the full test file using the closest *Tests.cs exemplar from contract context; do not emit malformed terminators like ';;' or ',;'.
+For CS0122 (inaccessible member) in tests, use only the public bootstrap API shown in contract context exemplar Setup lines — never access private ServiceProvider or other non-public bootstrap members.
 When fixing compile errors, copy patterns from the implementation exemplars in contract context; do not invent APIs — use only members visible on interfaces/base classes shown there.
 If compliance findings mention missing DI registration, append one line in the bootstrap/DI file for the new interface only — preserve every existing registration (especially InMemory/factory/lambda infrastructure wiring). Never change registrations for interfaces you did not generate.";
     }

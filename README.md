@@ -195,12 +195,12 @@ These run without the LLM and produce `AgentFinding` entries (High/Blocker can t
 
 | Check | Class | What it enforces |
 |-------|--------|------------------|
-| Repository contracts | `ValidateRepositoryContracts` | `I{Entity}Repository`, inheritance, ctor/base patterns. |
+| Layer contracts | `ContractComplianceValidator` | I*{Role} + implementation pairs for discovered layers (repository, service, controller). |
 | Path conventions | `ValidatePathConventions` | Controllers, indexes, duplicate index files. |
-| Missing tests | `TestCoverageAuditor` | `{Entity}RepositoryTests.cs` when `RepositoryTest` exemplars exist. |
+| Missing tests | `TestCoverageAuditor` | `*Tests.cs` per discovered layer (repository, service, controller, …). |
 | File quality | `GeneratedFileApplier` | Non-prose, C# shape, layer profiles, interface parity. |
-| Test syntax | `CSharpSyntaxGuard` | Balanced braces; rejects `;;` and similar. |
-| Test template | `RepositoryTestTemplateBuilder` | Clones sibling `*RepositoryTests.cs` if LLM output is invalid. |
+| Test syntax | `CodeExemplarContext.TryValidate` | Balanced braces; rejects `;;` and similar. |
+| Test template | `LayerTestTemplateBuilder` | Clones sibling layer `*Tests.cs` exemplar if LLM output is invalid. |
 
 ### Production vs test build failures
 

@@ -87,7 +87,7 @@ sealed partial class WorkflowOrchestrator
             await _mcpAdapter.PublishStatusAsync($"Rejected {applyResult.RejectedFiles.Count} low-quality generated file(s).");
         }
 
-        var complianceFindings = RepositoryComplianceValidator.CollectComplianceFindings(state);
+        var complianceFindings = ContractComplianceValidator.CollectComplianceFindings(state);
         complianceFindings.AddRange(llmOutputQualityFindings);
         foreach (var finding in complianceFindings)
         {
@@ -110,7 +110,7 @@ sealed partial class WorkflowOrchestrator
             };
             await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
 
-            complianceFindings = RepositoryComplianceValidator.CollectComplianceFindings(state);
+            complianceFindings = ContractComplianceValidator.CollectComplianceFindings(state);
             complianceFindings.AddRange(llmOutputQualityFindings);
         }
 
@@ -201,7 +201,7 @@ sealed partial class WorkflowOrchestrator
             state.Stage = WorkflowStage.Auditing;
             state.AddTimeline($"Re-audit after recovery attempt {state.RecoveryAttemptCount}.");
             state.Audit = await _auditorAgent.ExecuteAsync(state, cancellationToken);
-            var postRecoveryCompliance = RepositoryComplianceValidator.CollectComplianceFindings(state);
+            var postRecoveryCompliance = ContractComplianceValidator.CollectComplianceFindings(state);
             postRecoveryCompliance.AddRange(llmOutputQualityFindings);
             foreach (var finding in postRecoveryCompliance)
             {

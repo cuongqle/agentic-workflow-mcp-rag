@@ -13,6 +13,9 @@ static class GeneratedFileApplier
         var canonical = DetectCanonicalRoots(state.RepoPath);
         var conventions = LayerConventionProfileBuilder.Build(state.RepoPath);
         var generatedFiles = EnumerateGeneratedFiles(state).ToList();
+        var workflowProposedPaths = new HashSet<string>(
+            generatedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
+            StringComparer.OrdinalIgnoreCase);
         var interfaceCatalog = BuildInterfaceCatalog(state.RepoPath, generatedFiles);
         var typeNamespaceCatalog = BuildTypeNamespaceCatalog(state.RepoPath, generatedFiles);
 
@@ -50,15 +53,27 @@ static class GeneratedFileApplier
             }
 
             string content = NormalizeContent(relativePath, generatedFile.Content, canonical, typeNamespaceCatalog);
-            content = TryNormalizeRepositoryTestContent(relativePath, content, state.RepoPath);
-            if (!IsLikelyValidSource(relativePath, content, File.Exists(fullPath), state.RepoPath, conventions, interfaceCatalog, out string reason))
+            content = TryNormalizeLayerTestContent(relativePath, content, state.RepoPath);
+            bool existedBefore = File.Exists(fullPath);
+            string? existingOnDisk = existedBefore ? File.ReadAllText(fullPath) : null;
+            if (!PreExistingContractGuard.TryValidateOverwrite(
+                    relativePath,
+                    existingOnDisk,
+                    content,
+                    workflowProposedPaths,
+                    out string contractReason))
+            {
+                rejected.Add(new ApplyIssue(relativePath, contractReason));
+                continue;
+            }
+
+            if (!IsLikelyValidSource(relativePath, content, existedBefore, state.RepoPath, conventions, interfaceCatalog, out string reason))
             {
                 rejected.Add(new ApplyIssue(relativePath, reason));
                 continue;
             }
 
-            bool existedBefore = File.Exists(fullPath);
-            string? previousContent = existedBefore ? File.ReadAllText(fullPath) : null;
+            string? previousContent = existingOnDisk;
             File.WriteAllText(fullPath, content);
             applied.Add(relativePath);
             appliedChanges.Add(new AppliedFileChange(relativePath, existedBefore, previousContent));
@@ -478,27 +493,25 @@ static class GeneratedFileApplier
             .Concat(state.Frontend?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>());
     }
 
-    private static string TryNormalizeRepositoryTestContent(string relativePath, string content, string repoPath)
+    private static string TryNormalizeLayerTestContent(string relativePath, string content, string repoPath)
     {
         string fileName = Path.GetFileName(relativePath);
-        if (!fileName.EndsWith("RepositoryTests.cs", StringComparison.OrdinalIgnoreCase))
+        if (!fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
         {
             return content;
         }
 
-        if (CSharpSyntaxGuard.TryValidate(content, out _))
+        content = TestBootstrapContext.NormalizeResolutionAccess(content, repoPath);
+
+        if (CodeExemplarContext.TryValidate(content, out _)
+            && TestBootstrapContext.TryValidateTestResolution(content, repoPath, out _))
         {
             return content;
         }
 
-        string entity = Path.GetFileNameWithoutExtension(fileName);
-        if (entity.EndsWith("RepositoryTests", StringComparison.Ordinal))
-        {
-            entity = entity[..^"RepositoryTests".Length];
-        }
-
-        if (!string.IsNullOrWhiteSpace(entity)
-            && RepositoryTestTemplateBuilder.TryBuildFromExemplar(repoPath, entity, out string templated))
+        string? productionBaseName = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(fileName);
+        if (!string.IsNullOrWhiteSpace(productionBaseName)
+            && LayerTestTemplateBuilder.TryBuildFromExemplar(repoPath, productionBaseName, out string templated))
         {
             return templated;
         }
@@ -614,11 +627,19 @@ static class GeneratedFileApplier
                 return false;
             }
 
-            if (fileName.EndsWith("RepositoryTests.cs", StringComparison.OrdinalIgnoreCase)
-                && !CSharpSyntaxGuard.TryValidate(trimmed, out string syntaxReason))
+            if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
             {
-                reason = $"Repository test syntax check failed: {syntaxReason}";
-                return false;
+                if (!CodeExemplarContext.TryValidate(trimmed, out string syntaxReason))
+                {
+                    reason = $"Test syntax check failed: {syntaxReason}";
+                    return false;
+                }
+
+                if (!TestBootstrapContext.TryValidateTestResolution(trimmed, repoPath, out string bootstrapReason))
+                {
+                    reason = bootstrapReason;
+                    return false;
+                }
             }
         }
         else if (extension is ".js" or ".ts" or ".tsx" or ".jsx")
@@ -825,7 +846,7 @@ static class GeneratedFileApplier
         foreach (var generated in generatedFiles.Where(f => Path.GetFileName(f.RelativePath).StartsWith("I", StringComparison.OrdinalIgnoreCase)
                                                          && f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
         {
-            AddInterfaceMethods(generated.Content, map, overwrite: true);
+            AddInterfaceMethods(generated.Content, map, overwrite: true, skipProtectedInterfaces: true);
         }
 
         return new InterfaceCatalog(map);
@@ -879,11 +900,24 @@ static class GeneratedFileApplier
         }
     }
 
-    private static void AddInterfaceMethods(string content, Dictionary<string, HashSet<string>> map, bool overwrite = false)
+    private static readonly Regex InterfaceDeclarationRegex = new(
+        @"\binterface\s+(I[A-Za-z0-9_]*)\b",
+        RegexOptions.Compiled);
+
+    private static void AddInterfaceMethods(
+        string content,
+        Dictionary<string, HashSet<string>> map,
+        bool overwrite = false,
+        bool skipProtectedInterfaces = false)
     {
-        foreach (Match ifaceMatch in Regex.Matches(content, @"\binterface\s+(I[A-Za-z0-9_]*)\b"))
+        foreach (Match ifaceMatch in InterfaceDeclarationRegex.Matches(content))
         {
             string iface = ifaceMatch.Groups[1].Value;
+            if (skipProtectedInterfaces && PreExistingContractGuard.IsProtectedInterfaceName(iface))
+            {
+                continue;
+            }
+
             if (overwrite || !map.ContainsKey(iface))
             {
                 map[iface] = new HashSet<string>(StringComparer.Ordinal);
