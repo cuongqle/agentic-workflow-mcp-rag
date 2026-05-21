@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace agents_mcp_rag.Infrastructure;
 
 /// <summary>
@@ -96,10 +98,25 @@ internal static class LayerTestTemplateBuilder
         foreach (var (from, to) in BuildReplacementPairs(exemplarSubject, targetSubject)
                      .OrderByDescending(pair => pair.From.Length))
         {
-            template = template.Replace(from, to, StringComparison.Ordinal);
+            template = ReplaceIdentifier(template, from, to);
         }
 
+        template = TestBootstrapContext.SynchronizeProductionMembers(repoPath, targetSubject, template);
         return TestBootstrapContext.NormalizeResolutionAccess(template, repoPath);
+    }
+
+    private static string ReplaceIdentifier(string content, string from, string to)
+    {
+        if (string.IsNullOrWhiteSpace(from) || from.Equals(to, StringComparison.Ordinal))
+        {
+            return content;
+        }
+
+        return Regex.Replace(
+            content,
+            $@"\b{Regex.Escape(from)}\b",
+            to,
+            RegexOptions.CultureInvariant);
     }
 
     internal static IReadOnlyList<(string From, string To)> BuildReplacementPairs(

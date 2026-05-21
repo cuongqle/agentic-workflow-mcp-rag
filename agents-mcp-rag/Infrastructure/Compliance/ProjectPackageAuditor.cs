@@ -292,10 +292,13 @@ internal static class ProjectPackageAuditor
         string absoluteDir = Path.GetDirectoryName(Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar))) ?? repoPath;
         while (!string.IsNullOrWhiteSpace(absoluteDir) && absoluteDir.StartsWith(repoPath, StringComparison.Ordinal))
         {
-            string? csproj = Directory.GetFiles(absoluteDir, "*.csproj").FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(csproj))
+            if (Directory.Exists(absoluteDir))
             {
-                return csproj;
+                string? csproj = Directory.GetFiles(absoluteDir, "*.csproj").FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(csproj))
+                {
+                    return csproj;
+                }
             }
 
             absoluteDir = Path.GetDirectoryName(absoluteDir) ?? string.Empty;

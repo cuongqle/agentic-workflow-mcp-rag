@@ -77,6 +77,7 @@ For test compile errors (CS1525/CS1002), rewrite the full test file using the cl
 For CS0019 (operator cannot be applied to mismatched types), align test literals and assertions with entity property types listed in contract context (e.g. parse temporal values instead of quoted strings).
 For CS0122 (inaccessible member) in tests, use only the public bootstrap API shown in contract context exemplar Setup lines — never access private ServiceProvider or other non-public bootstrap members.
 For CS1061 on index Map (entity missing member), either add the property to the entity class or remove it from the index projection — use only properties listed in authoritative entity contract context.
+For CS1061 in *Tests.cs, change the call to a member that exists on the type under test (see production API in contract context) — do not invent method names.
 When fixing compile errors, copy patterns from the implementation exemplars in contract context; do not invent APIs — use only members visible on interfaces/base classes shown there.
 If compliance findings mention missing DI registration, do NOT return the bootstrap .cs file — omit it from files[] so the workflow can append into the registration scope described in contract context. Never rewrite bootstrap usings or namespace braces.
 Never suggest or add registrations for interfaces already wired in bootstrap exemplars — only new interface+implementation pairs from this task's proposed files.

@@ -252,6 +252,182 @@ internal static class TestBootstrapContext
         return true;
     }
 
+    private static readonly Regex ProductionPublicMethodRegex = new(
+        @"public\s+[\w<>\[\],\s\?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static readonly Regex SutInstanceCallRegex = new(
+        @"\b(_[A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        RegexOptions.Compiled);
+
+    internal static bool TryValidateProductionMembers(
+        string repoPath,
+        string testContent,
+        string productionBaseName,
+        IReadOnlyDictionary<string, string>? proposedDefinitions,
+        out string reason)
+    {
+        reason = string.Empty;
+        if (!TryGetProductionApi(
+                repoPath,
+                productionBaseName,
+                proposedDefinitions,
+                out string productionType,
+                out HashSet<string> methods))
+        {
+            return true;
+        }
+
+        var invalid = GetInvalidSutCalls(testContent, productionType, methods);
+        if (invalid.Count == 0)
+        {
+            return true;
+        }
+
+        reason =
+            $"Test calls member(s) not on {productionType}: {string.Join(", ", invalid)}. "
+            + $"Use only: {string.Join(", ", methods.OrderBy(m => m, StringComparer.Ordinal))}.";
+        return false;
+    }
+
+    internal static string SynchronizeProductionMembers(
+        string repoPath,
+        string productionBaseName,
+        string testContent,
+        IReadOnlyDictionary<string, string>? proposedDefinitions = null)
+    {
+        if (!TryGetProductionApi(repoPath, productionBaseName, proposedDefinitions, out string productionType, out HashSet<string> methods))
+        {
+            return testContent;
+        }
+
+        var sutVars = GetSutVariables(testContent, productionType);
+        if (sutVars.Count == 0)
+        {
+            return testContent;
+        }
+
+        foreach (Match match in SutInstanceCallRegex.Matches(testContent))
+        {
+            string variable = match.Groups[1].Value;
+            string method = match.Groups[2].Value;
+            if (!sutVars.Contains(variable) || methods.Contains(method))
+            {
+                continue;
+            }
+
+            string? replacement = FindMethodByActionPrefix(method, methods);
+            if (string.IsNullOrWhiteSpace(replacement))
+            {
+                continue;
+            }
+
+            testContent = Regex.Replace(
+                testContent,
+                $@"\b{Regex.Escape(variable)}\.{Regex.Escape(method)}\s*\(",
+                $"{variable}.{replacement}(");
+        }
+
+        return testContent;
+    }
+
+    internal static string? BuildProductionContractContext(
+        string repoPath,
+        string productionBaseName,
+        IReadOnlyDictionary<string, string>? proposedDefinitions = null) =>
+        TryGetProductionApi(repoPath, productionBaseName, proposedDefinitions, out string productionType, out HashSet<string> methods)
+            ? $"Authoritative {productionType} API for tests (call only these methods): "
+              + string.Join(", ", methods.OrderBy(m => m, StringComparer.Ordinal))
+            : null;
+
+    private static List<string> GetInvalidSutCalls(
+        string testContent,
+        string productionType,
+        HashSet<string> methods)
+    {
+        var invalid = new List<string>();
+        var sutVars = GetSutVariables(testContent, productionType);
+        foreach (Match match in SutInstanceCallRegex.Matches(testContent))
+        {
+            if (sutVars.Contains(match.Groups[1].Value) && !methods.Contains(match.Groups[2].Value))
+            {
+                invalid.Add(match.Groups[2].Value);
+            }
+        }
+
+        return invalid.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static HashSet<string> GetSutVariables(string testContent, string productionType)
+    {
+        var variables = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(
+                     testContent,
+                     $@"\b{Regex.Escape(productionType)}\s+(_[A-Za-z_][A-Za-z0-9_]*)\s*;",
+                     RegexOptions.CultureInvariant))
+        {
+            variables.Add(match.Groups[1].Value);
+        }
+
+        foreach (Match match in Regex.Matches(
+                     testContent,
+                     $@"\b(_[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+{Regex.Escape(productionType)}\s*\(",
+                     RegexOptions.CultureInvariant))
+        {
+            variables.Add(match.Groups[1].Value);
+        }
+
+        return variables;
+    }
+
+    private static string? FindMethodByActionPrefix(string invalidMethod, HashSet<string> methods)
+    {
+        foreach (string prefix in new[] { "Insert", "Post", "Put", "Get", "Delete", "Update", "Create" })
+        {
+            if (!invalidMethod.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return methods.FirstOrDefault(m => m.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return null;
+    }
+
+    private static bool TryGetProductionApi(
+        string repoPath,
+        string productionBaseName,
+        IReadOnlyDictionary<string, string>? proposedDefinitions,
+        out string productionType,
+        out HashSet<string> methods)
+    {
+        productionType = productionBaseName;
+        methods = new HashSet<string>(StringComparer.Ordinal);
+        string? content = proposedDefinitions is not null
+                          && proposedDefinitions.TryGetValue(productionBaseName, out string? proposed)
+                          && !string.IsNullOrWhiteSpace(proposed)
+            ? proposed
+            : Directory
+                .EnumerateFiles(repoPath, $"{productionBaseName}.cs", SearchOption.AllDirectories)
+                .FirstOrDefault(p => !p.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                                  && !p.Contains("/bin/", StringComparison.OrdinalIgnoreCase)) is string path
+                ? File.ReadAllText(path)
+                : null;
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        foreach (Match match in ProductionPublicMethodRegex.Matches(content))
+        {
+            methods.Add(match.Groups[1].Value);
+        }
+
+        return methods.Count > 0;
+    }
+
     private static string? FindSetupExemplar(string repoPath, string bootstrapClassName)
     {
         var conventions = TestCoverageAuditor.DiscoverTestConventions(repoPath);

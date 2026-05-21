@@ -330,6 +330,25 @@ static class ContractComplianceValidator
                     Severity = FindingSeverity.High,
                     Message = literalReason
                 });
+                continue;
+            }
+
+            string? productionBase = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(
+                Path.GetFileName(file.RelativePath));
+            if (!string.IsNullOrWhiteSpace(productionBase)
+                && !TestBootstrapContext.TryValidateProductionMembers(
+                    state.RepoPath,
+                    file.Content,
+                    productionBase,
+                    TypeMemberConsistencyGuard.BuildProposedTypeDefinitions(
+                        WorkflowFindingRules.GetAllProposedFiles(state)),
+                    out string productionMemberReason))
+            {
+                findings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = productionMemberReason
+                });
             }
         }
 
@@ -367,6 +386,37 @@ static class ContractComplianceValidator
         var findings = new List<AgentFinding>();
         var proposedFiles = WorkflowFindingRules.GetAllProposedFiles(state);
         var layerProfiles = LayerConventionProfileBuilder.Build(state.RepoPath);
+        FrontendLayout? frontend = RagContextComposer.DiscoverFrontendLayout(state.RepoPath);
+
+        if (frontend is not null)
+        {
+            foreach (var file in proposedFiles)
+            {
+                string path = file.RelativePath.Replace('\\', '/');
+                string? forbidden = frontend.ForbiddenRoots.FirstOrDefault(root =>
+                    path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(forbidden))
+                {
+                    findings.Add(new AgentFinding
+                    {
+                        Severity = FindingSeverity.High,
+                        Message =
+                            $"Frontend file '{path}' must not be under parallel root '{forbidden}/'. "
+                            + $"Use host project '{frontend.WebProjectRoot}' and feature-modules root '{frontend.ModulesRoot}/'."
+                    });
+                    continue;
+                }
+
+                if (!RagContextComposer.TryValidateFeatureModulePath(path, frontend, out string layoutReason))
+                {
+                    findings.Add(new AgentFinding
+                    {
+                        Severity = FindingSeverity.High,
+                        Message = layoutReason
+                    });
+                }
+            }
+        }
 
         foreach (var profile in layerProfiles.GetActiveProfiles())
         {

@@ -207,8 +207,17 @@ static class CompilationContractContextBuilder
                     }
                 }
 
-                contextLines.Add(
-                    $"CS1061 contract: type '{typeName}' must declare member '{missingMember}' (add member or use an existing declared/base member).");
+                string? productionContract = TestBootstrapContext.BuildProductionContractContext(repoPath, typeName);
+                if (!string.IsNullOrWhiteSpace(productionContract))
+                {
+                    contextLines.Add(
+                        $"CS1061 on test target {typeName}: do not call '{missingMember}' — it is not on the production type. {productionContract}");
+                }
+                else
+                {
+                    contextLines.Add(
+                        $"CS1061 contract: type '{typeName}' must declare member '{missingMember}' (add member or use an existing declared/base member).");
+                }
             }
         }
 
@@ -348,9 +357,48 @@ static class CompilationContractContextBuilder
         IReadOnlyList<string> allowedFiles,
         List<string> contextLines)
     {
-        bool hasControllerTarget = allowedFiles.Any(path =>
-            Path.GetFileName(path).EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase)
-            && !Path.GetFileName(path).Equals("Controller.cs", StringComparison.OrdinalIgnoreCase));
+        var controllerBaseNames = allowedFiles
+            .Select(path => Path.GetFileName(path))
+            .Select(name =>
+            {
+                if (name.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase)
+                    && !name.Equals("Controller.cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Path.GetFileNameWithoutExtension(name);
+                }
+
+                if (name.EndsWith("ControllerTests.cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    return TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(name);
+                }
+
+                return null;
+            })
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (controllerBaseNames.Count == 0)
+        {
+            return;
+        }
+
+        foreach (string? controllerBase in controllerBaseNames)
+        {
+            if (string.IsNullOrWhiteSpace(controllerBase))
+            {
+                continue;
+            }
+
+            string? contract = TestBootstrapContext.BuildProductionContractContext(repoPath, controllerBase);
+            if (!string.IsNullOrWhiteSpace(contract))
+            {
+                contextLines.Add(contract);
+            }
+        }
+
+        bool hasControllerTarget = controllerBaseNames.Any(name =>
+            name.EndsWith("Controller", StringComparison.Ordinal));
         if (!hasControllerTarget)
         {
             return;

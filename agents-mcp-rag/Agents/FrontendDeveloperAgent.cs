@@ -31,7 +31,9 @@ IMPORTANT: Return strictly valid JSON with this shape:
 }}
 
 Include real frontend files that should be created/updated inside the target repository.
-Paths must be repository-relative and should target actual source directories.
+Paths must be repository-relative and must use the discovered frontend host project and feature-modules root from RAG context.
+Do NOT create a new sibling project/folder that mirrors backend naming (e.g. {{SolutionName}}.Application) — UI code belongs inside the existing host project.
+Mirror the exemplar feature folder layout from legacy context: put controllers, services, and views in the same subfolders as the exemplar; only bootstrap/router files (e.g. loader.js, router.js) may sit at feature root — never place .html or *Proxy.js at feature root.
 Do NOT invent generic roots like src/, app/, backend/, frontend/ unless they already exist in legacy context.";
     }
 

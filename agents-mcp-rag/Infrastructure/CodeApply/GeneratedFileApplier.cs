@@ -20,6 +20,7 @@ static class GeneratedFileApplier
         var interfaceCatalog = BuildInterfaceCatalog(state.RepoPath, generatedFiles);
         var typeNamespaceCatalog = BuildTypeNamespaceCatalog(state.RepoPath, generatedFiles);
         var proposedDefinitions = TypeMemberConsistencyGuard.BuildProposedTypeDefinitions(generatedFiles);
+        var declaredTypePaths = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var generatedFile in generatedFiles)
         {
@@ -35,12 +36,23 @@ static class GeneratedFileApplier
             }
 
             relativePath = NormalizeToCanonical(relativePath, generatedFile.Content, canonical);
+            string? declaredType = TryExtractDeclaredTypeName(generatedFile.Content);
+            if (!string.IsNullOrWhiteSpace(declaredType)
+                && declaredTypePaths.TryGetValue(declaredType, out string? priorPath))
+            {
+                relativePath = priorPath;
+            }
+
             if (!TryResolveDuplicateToExistingPath(state.RepoPath, relativePath, generatedFile.Content, out relativePath, out string? duplicateResolutionIssue))
             {
                 rejected.Add(new ApplyIssue(relativePath, duplicateResolutionIssue ?? "Duplicate resolution failed."));
                 continue;
             }
             relativePath = relativePath.TrimStart('/');
+            if (!string.IsNullOrWhiteSpace(declaredType))
+            {
+                declaredTypePaths[declaredType] = relativePath;
+            }
             string fullPath = Path.GetFullPath(Path.Combine(state.RepoPath, relativePath));
             if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
             {
@@ -244,6 +256,31 @@ static class GeneratedFileApplier
             return $"{roots.UnitTestRepositoryTests}/{fileName}";
         }
 
+        if (roots.FrontendLayout is not null)
+        {
+            string? remapped = RagContextComposer.RemapForbiddenFrontendPath(path, roots.FrontendLayout);
+            if (!string.IsNullOrWhiteSpace(remapped))
+            {
+                path = remapped;
+            }
+
+            if ((fileName.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
+                 || fileName.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
+                 || fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                 || fileName.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase)
+                 || fileName.EndsWith(".jsx", StringComparison.OrdinalIgnoreCase)
+                 || fileName.EndsWith(".vue", StringComparison.OrdinalIgnoreCase))
+                && path.Contains("/modules/", StringComparison.OrdinalIgnoreCase)
+                && !path.StartsWith(roots.FrontendLayout.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                int modulesIndex = path.IndexOf("/modules/", StringComparison.OrdinalIgnoreCase);
+                string moduleSuffix = path[(modulesIndex + "/modules/".Length)..];
+                path = $"{roots.FrontendLayout.ModulesRoot}/{moduleSuffix}";
+            }
+
+            path = RagContextComposer.NormalizeFeatureModuleRelativePath(path, roots.FrontendLayout, content);
+        }
+
         return path;
     }
 
@@ -286,6 +323,28 @@ static class GeneratedFileApplier
         return hasSimpleModelSignals;
     }
 
+    private static string? TryExtractDeclaredTypeName(string content)
+    {
+        Match match = Regex.Match(
+            content,
+            @"\bpublic\s+(?:partial\s+)?(?:class|interface)\s+([A-Za-z_][A-Za-z0-9_]*)\b");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static bool DeclaresType(string content, string typeName) =>
+        Regex.IsMatch(content, $@"\b(?:public\s+)?(?:partial\s+)?class\s+{Regex.Escape(typeName)}\b")
+        || Regex.IsMatch(content, $@"\b(?:public\s+)?(?:partial\s+)?interface\s+{Regex.Escape(typeName)}\b");
+
+    private static List<string> FindFilesDeclaringType(string repoPath, string typeName) =>
+        Directory
+            .EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            .Where(path => DeclaresType(File.ReadAllText(path), typeName))
+            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
     private static bool TryResolveDuplicateToExistingPath(
         string repoPath,
         string relativePath,
@@ -295,8 +354,9 @@ static class GeneratedFileApplier
     {
         resolvedRelativePath = relativePath.Replace('\\', '/').TrimStart('/');
         issue = null;
+        string targetPath = resolvedRelativePath;
 
-        string fileName = Path.GetFileName(resolvedRelativePath);
+        string fileName = Path.GetFileName(targetPath);
         if (string.IsNullOrWhiteSpace(fileName))
         {
             return true;
@@ -311,6 +371,36 @@ static class GeneratedFileApplier
             return true;
         }
 
+        string? declaredType = TryExtractDeclaredTypeName(content);
+        if (!string.IsNullOrWhiteSpace(declaredType))
+        {
+            var typeMatches = FindFilesDeclaringType(repoPath, declaredType);
+            if (typeMatches.Any(match => match.Equals(targetPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            string expectedFileName = $"{declaredType}.cs";
+            string? preferred = typeMatches.FirstOrDefault(match =>
+                                      Path.GetFileName(match).Equals(expectedFileName, StringComparison.OrdinalIgnoreCase))
+                                  ?? (typeMatches.Count == 1 ? typeMatches[0] : null);
+            if (!string.IsNullOrWhiteSpace(preferred))
+            {
+                resolvedRelativePath = preferred;
+                targetPath = preferred;
+                return true;
+            }
+
+            if (typeMatches.Count > 1)
+            {
+                issue =
+                    $"Type '{declaredType}' is already declared in: {string.Join(", ", typeMatches)}. "
+                    + $"Update the existing file instead of creating '{fileName}'.";
+                return false;
+            }
+        }
+
+        targetPath = resolvedRelativePath;
         var existingMatches = Directory.EnumerateFiles(repoPath, fileName, SearchOption.AllDirectories)
             .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
                         && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
@@ -323,7 +413,6 @@ static class GeneratedFileApplier
             return true;
         }
 
-        string targetPath = resolvedRelativePath;
         if (existingMatches.Any(match => match.Equals(targetPath, StringComparison.OrdinalIgnoreCase)))
         {
             return true;
@@ -558,7 +647,8 @@ static class GeneratedFileApplier
             repositoryIndexes,
             repositoryEntities,
             repositoryInterfacesNamespace,
-            unitTestRepositoryTests);
+            unitTestRepositoryTests,
+            RagContextComposer.DiscoverFrontendLayout(repoPath));
     }
 
     private static IEnumerable<GeneratedFile> EnumerateGeneratedFiles(WorkflowState state)
@@ -588,14 +678,21 @@ static class GeneratedFileApplier
         content = TestBootstrapContext.NormalizeResolutionAccess(content, repoPath);
         content = TestBootstrapContext.NormalizeTestLiteralTypes(content, repoPath);
 
+        string? productionBaseName = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(fileName);
+        if (!string.IsNullOrWhiteSpace(productionBaseName))
+        {
+            content = TestBootstrapContext.SynchronizeProductionMembers(repoPath, productionBaseName, content);
+        }
+
         if (CodeExemplarContext.TryValidate(content, out _)
             && TestBootstrapContext.TryValidateTestResolution(content, repoPath, out _)
-            && TestBootstrapContext.TryValidateTestLiteralTypes(content, repoPath, out _))
+            && TestBootstrapContext.TryValidateTestLiteralTypes(content, repoPath, out _)
+            && (string.IsNullOrWhiteSpace(productionBaseName)
+                || TestBootstrapContext.TryValidateProductionMembers(repoPath, content, productionBaseName, proposedDefinitions: null, out _)))
         {
             return content;
         }
 
-        string? productionBaseName = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(fileName);
         if (!string.IsNullOrWhiteSpace(productionBaseName)
             && LayerTestTemplateBuilder.TryBuildFromExemplar(repoPath, productionBaseName, out string templated))
         {
@@ -708,6 +805,19 @@ static class GeneratedFileApplier
                 if (!TestBootstrapContext.TryValidateTestLiteralTypes(trimmed, repoPath, out string literalReason))
                 {
                     reason = literalReason;
+                    return false;
+                }
+
+                string? productionBase = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(fileName);
+                if (!string.IsNullOrWhiteSpace(productionBase)
+                    && !TestBootstrapContext.TryValidateProductionMembers(
+                        repoPath,
+                        trimmed,
+                        productionBase,
+                        proposedDefinitions: null,
+                        out string productionMemberReason))
+                {
+                    reason = productionMemberReason;
                     return false;
                 }
             }
@@ -1129,7 +1239,8 @@ static class GeneratedFileApplier
         string? RepositoryIndexes,
         string? RepositoryEntities,
         string? RepositoryInterfacesNamespace,
-        string? UnitTestRepositoryTests);
+        string? UnitTestRepositoryTests,
+        FrontendLayout? FrontendLayout);
 }
 
 readonly record struct ApplyIssue(string RelativePath, string Reason);

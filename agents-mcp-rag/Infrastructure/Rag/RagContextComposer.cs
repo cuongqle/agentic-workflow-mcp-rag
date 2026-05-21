@@ -38,9 +38,32 @@ static class RagContextComposer
         content.AppendLine($"- Relevant source/config files detected: {files.Count}");
         content.AppendLine($"- Backend controller roots: {FormatList(FindDirectoriesEndingWith(repoPath, "Controllers"))}");
         content.AppendLine($"- Backend entity/model roots: {FormatList(FindDirectoriesEndingWith(repoPath, "Entities", "Models"))}");
-        content.AppendLine($"- Frontend controller roots: {FormatList(FindDirectoriesContaining(repoPath, "controllers"))}");
-        content.AppendLine($"- Frontend service roots: {FormatList(FindDirectoriesContaining(repoPath, "services"))}");
-        content.AppendLine($"- Frontend view roots: {FormatList(FindDirectoriesContaining(repoPath, "views"))}");
+        FrontendLayout? frontend = DiscoverFrontendLayout(repoPath);
+        if (frontend is not null)
+        {
+            content.AppendLine($"- Frontend host project root: {frontend.WebProjectRoot}");
+            content.AppendLine($"- Frontend feature-modules root (authoritative): {frontend.ModulesRoot}");
+            content.AppendLine($"- Frontend exemplar feature: {frontend.ExemplarModuleName}");
+            if (frontend.RequiredSubfolders.Count > 0)
+            {
+                content.AppendLine($"- Required feature subfolders: {FormatList(frontend.RequiredSubfolders)}");
+            }
+            if (frontend.AllowedRootFileNames.Count > 0)
+            {
+                content.AppendLine(
+                    $"- Files allowed at feature root only: {FormatList(frontend.AllowedRootFileNames)}");
+            }
+            if (frontend.ForbiddenRoots.Count > 0)
+            {
+                content.AppendLine($"- Do NOT add parallel frontend roots: {FormatList(frontend.ForbiddenRoots)}");
+            }
+        }
+        else
+        {
+            content.AppendLine($"- Frontend controller roots: {FormatList(FindDirectoriesContaining(repoPath, "controllers"))}");
+            content.AppendLine($"- Frontend service roots: {FormatList(FindDirectoriesContaining(repoPath, "services"))}");
+            content.AppendLine($"- Frontend view roots: {FormatList(FindDirectoriesContaining(repoPath, "views"))}");
+        }
 
         var representative = files
             .Select(path => Path.GetRelativePath(repoPath, path))
@@ -83,6 +106,7 @@ static class RagContextComposer
         var signals = ExtractTaskSignals(taskPrompt);
         string entityName = InferTargetEntityName(taskPrompt) ?? "NewEntity";
         var candidateFiles = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath).ToList();
+        FrontendLayout? frontend = DiscoverFrontendLayout(repoPath);
 
         AppendCorpusSummary(sb, candidateFiles, repoPath);
         AppendSemanticContext(sb, ragIndex, taskPrompt);
@@ -91,7 +115,7 @@ static class RagContextComposer
             .Select(path => new
             {
                 Path = path,
-                Score = ScoreFile(path, signals)
+                Score = ScoreFile(Path.GetRelativePath(repoPath, path).Replace('\\', '/'), signals, frontend)
             })
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Path.Length)
@@ -104,10 +128,10 @@ static class RagContextComposer
             path.Contains("Repository", StringComparison.OrdinalIgnoreCase)
             || path.Contains("Entities", StringComparison.OrdinalIgnoreCase)
             || path.Contains("Index", StringComparison.OrdinalIgnoreCase), repoPath);
-        AppendCategory(sb, "Frontend controllers/services/views", ranked, path =>
-            path.Contains("controllers", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("services", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith(".html", StringComparison.OrdinalIgnoreCase), repoPath);
+        AppendCategory(sb, "Frontend UI modules", ranked, path =>
+            FeatureModuleSubfolderNames.Any(name => path.Contains($"/{name}/", StringComparison.OrdinalIgnoreCase))
+            || path.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".vue", StringComparison.OrdinalIgnoreCase), repoPath);
         AppendCategory(sb, "Unit tests", ranked, path =>
             path.Contains("UnitTest", StringComparison.OrdinalIgnoreCase)
             || path.Contains("Tests", StringComparison.OrdinalIgnoreCase), repoPath);
@@ -148,6 +172,8 @@ static class RagContextComposer
             sb.AppendLine(typeMemberRules);
         }
         AppendExpectedPaths(sb, repoPath, entityName);
+        AppendFrontendExpectedPaths(sb, repoPath, entityName);
+        AppendFrontendModuleStructure(sb, repoPath);
 
         sb.AppendLine("Required generated file set for new entity:");
         sb.AppendLine("- WebAPI controller");
@@ -155,7 +181,7 @@ static class RagContextComposer
         sb.AppendLine("- Repository implementation (e.g. {Entity}Repository)");
         sb.AppendLine("- Repository entity model");
         sb.AppendLine("- Repository index");
-        sb.AppendLine("- Frontend controller/service/view");
+        sb.AppendLine("- Frontend UI files under the discovered feature-modules root inside the existing host project (never a new sibling project folder that mirrors backend naming)");
         sb.AppendLine("- Unit tests for repository/controller paths");
         sb.AppendLine();
         sb.AppendLine("Required repository interface style:");
@@ -383,6 +409,373 @@ static class RagContextComposer
         sb.AppendLine("Use these exact roots. Do not create alternative roots with similar names.");
     }
 
+    private static void AppendFrontendExpectedPaths(StringBuilder sb, string repoPath, string entityName)
+    {
+        FrontendLayout? frontend = DiscoverFrontendLayout(repoPath);
+        if (frontend is null)
+        {
+            return;
+        }
+
+        string featureName = entityName.ToLowerInvariant();
+        sb.AppendLine();
+        sb.AppendLine(
+            $"Expected frontend paths for '{entityName}' (under host project '{frontend.WebProjectRoot}', mirror feature '{frontend.ExemplarModuleName}'):");
+        string exemplarAbsolute = Path.Combine(
+            repoPath,
+            frontend.ModulesRoot.Replace('/', Path.DirectorySeparatorChar),
+            frontend.ExemplarModuleName);
+        if (Directory.Exists(exemplarAbsolute))
+        {
+            foreach (string subfolder in Directory.EnumerateDirectories(exemplarAbsolute)
+                         .Select(Path.GetFileName)
+                         .Where(name => !string.IsNullOrWhiteSpace(name))
+                         .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.AppendLine($"- {frontend.ModulesRoot}/{featureName}/{subfolder}/");
+            }
+        }
+        else
+        {
+            sb.AppendLine($"- {frontend.ModulesRoot}/{featureName}/<mirror exemplar subfolders>/");
+        }
+
+        sb.AppendLine(
+            $"- Wire routes/bootstrap in the existing host project (see exemplar under {frontend.ModulesRoot}/{frontend.ExemplarModuleName}/)");
+        foreach (string forbidden in frontend.ForbiddenRoots)
+        {
+            sb.AppendLine($"- Forbidden parallel root: {forbidden}/");
+        }
+
+        sb.AppendLine("- Never place .html, services, or controllers directly in the feature folder root.");
+    }
+
+    private static void AppendFrontendModuleStructure(StringBuilder sb, string repoPath)
+    {
+        FrontendLayout? frontend = DiscoverFrontendLayout(repoPath);
+        if (frontend is null)
+        {
+            return;
+        }
+
+        string exemplarAbsolute = Path.Combine(
+            repoPath,
+            frontend.ModulesRoot.Replace('/', Path.DirectorySeparatorChar),
+            frontend.ExemplarModuleName);
+        if (!Directory.Exists(exemplarAbsolute))
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"Frontend feature layout (mirror '{frontend.ExemplarModuleName}' exactly):");
+        AppendFeatureDirectoryTree(sb, repoPath, Path.Combine(frontend.ModulesRoot, frontend.ExemplarModuleName), exemplarAbsolute, "  ");
+        sb.AppendLine(
+            "New features must use the same subfolders. Only bootstrap/router files listed above may sit at feature root.");
+    }
+
+    private static void AppendFeatureDirectoryTree(
+        StringBuilder sb,
+        string repoPath,
+        string relativeDir,
+        string absoluteDir,
+        string indent)
+    {
+        foreach (string file in Directory.EnumerateFiles(absoluteDir).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"{indent}{Path.GetRelativePath(repoPath, file).Replace('\\', '/')}");
+        }
+
+        foreach (string subdir in Directory.EnumerateDirectories(absoluteDir).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+        {
+            string name = Path.GetFileName(subdir) ?? string.Empty;
+            sb.AppendLine($"{indent}{relativeDir.Replace('\\', '/')}/{name}/");
+            AppendFeatureDirectoryTree(
+                sb,
+                repoPath,
+                $"{relativeDir}/{name}",
+                subdir,
+                indent + "  ");
+        }
+    }
+
+    internal static string NormalizeFeatureModuleRelativePath(
+        string relativePath,
+        FrontendLayout layout,
+        string content)
+    {
+        string normalized = relativePath.Replace('\\', '/').TrimStart('/');
+        if (!normalized.StartsWith(layout.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
+        string remainder = normalized[(layout.ModulesRoot.Length + 1)..];
+        int slash = remainder.IndexOf('/');
+        if (slash < 0)
+        {
+            return normalized;
+        }
+
+        string feature = remainder[..slash];
+        string tail = remainder[(slash + 1)..];
+        if (string.IsNullOrWhiteSpace(tail) || tail.Contains('/'))
+        {
+            return normalized;
+        }
+
+        if (layout.AllowedRootFileNames.Any(name => name.Equals(tail, StringComparison.OrdinalIgnoreCase)))
+        {
+            return normalized;
+        }
+
+        string? subfolder = ClassifyFrontendFeatureFile(tail, content, layout);
+        return string.IsNullOrWhiteSpace(subfolder)
+            ? normalized
+            : $"{layout.ModulesRoot}/{feature}/{subfolder}/{tail}";
+    }
+
+    internal static bool TryValidateFeatureModulePath(
+        string relativePath,
+        FrontendLayout layout,
+        out string reason)
+    {
+        reason = string.Empty;
+        string normalized = relativePath.Replace('\\', '/').TrimStart('/');
+        if (!normalized.StartsWith(layout.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string remainder = normalized[(layout.ModulesRoot.Length + 1)..];
+        int slash = remainder.IndexOf('/');
+        if (slash < 0)
+        {
+            return true;
+        }
+
+        string tail = remainder[(slash + 1)..];
+        if (string.IsNullOrWhiteSpace(tail) || tail.Contains('/'))
+        {
+            return true;
+        }
+
+        if (layout.AllowedRootFileNames.Any(name => name.Equals(tail, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        reason =
+            $"Frontend file '{relativePath}' must be under {layout.ModulesRoot}/<feature>/{string.Join("|", layout.RequiredSubfolders)}/ "
+            + $"(only {string.Join(", ", layout.AllowedRootFileNames)} may sit at feature root).";
+        return false;
+    }
+
+    private static string? ClassifyFrontendFeatureFile(string fileName, string content, FrontendLayout layout)
+    {
+        if (fileName.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+        {
+            return PickSubfolder(layout, "views");
+        }
+
+        if (fileName.Contains("Proxy", StringComparison.OrdinalIgnoreCase)
+            || fileName.Contains("Service", StringComparison.OrdinalIgnoreCase)
+            || content.Contains(".factory(", StringComparison.Ordinal)
+            || content.Contains(".service(", StringComparison.Ordinal))
+        {
+            return PickSubfolder(layout, "services");
+        }
+
+        if (fileName.Contains("Controller", StringComparison.OrdinalIgnoreCase)
+            || content.Contains(".controller(", StringComparison.Ordinal))
+        {
+            return PickSubfolder(layout, "controllers");
+        }
+
+        if (fileName.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase))
+        {
+            return PickSubfolder(layout, "controllers");
+        }
+
+        return null;
+    }
+
+    private static string? PickSubfolder(FrontendLayout layout, string preferred)
+    {
+        if (layout.RequiredSubfolders.Any(folder => folder.Equals(preferred, StringComparison.OrdinalIgnoreCase)))
+        {
+            return preferred;
+        }
+
+        return layout.RequiredSubfolders.FirstOrDefault();
+    }
+
+    internal static FrontendLayout? DiscoverFrontendLayout(string repoPath)
+    {
+        if (!Directory.Exists(repoPath))
+        {
+            return null;
+        }
+
+        var candidates = new List<(string ModulesRoot, int Score)>();
+        foreach (string modulesDir in Directory.EnumerateDirectories(repoPath, "modules", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(repoPath, modulesDir).Replace('\\', '/');
+            if (relative.Contains("/Scripts/", StringComparison.OrdinalIgnoreCase)
+                || relative.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase)
+                || !HasFeatureModuleChildren(modulesDir))
+            {
+                continue;
+            }
+
+            int jsCount = Directory
+                .EnumerateFiles(modulesDir, "*.*", SearchOption.AllDirectories)
+                .Count(path =>
+                {
+                    string ext = Path.GetExtension(path);
+                    return ext.Equals(".js", StringComparison.OrdinalIgnoreCase)
+                           || ext.Equals(".ts", StringComparison.OrdinalIgnoreCase)
+                           || ext.Equals(".tsx", StringComparison.OrdinalIgnoreCase)
+                           || ext.Equals(".jsx", StringComparison.OrdinalIgnoreCase)
+                           || ext.Equals(".vue", StringComparison.OrdinalIgnoreCase)
+                           || ext.Equals(".html", StringComparison.OrdinalIgnoreCase);
+                });
+            int score = jsCount;
+            string? webProject = ResolveWebProjectRoot(repoPath, modulesDir);
+            if (!string.IsNullOrWhiteSpace(webProject))
+            {
+                score += 500;
+            }
+
+            if (IsSolutionSiblingApplicationFolder(repoPath, relative))
+            {
+                score -= 400;
+            }
+
+            candidates.Add((relative, score));
+        }
+
+        var best = candidates.OrderByDescending(c => c.Score).ThenBy(c => c.ModulesRoot.Length).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(best.ModulesRoot))
+        {
+            return null;
+        }
+
+        string modulesAbsolute = Path.Combine(repoPath, best.ModulesRoot.Replace('/', Path.DirectorySeparatorChar));
+        string exemplarModule = Directory.EnumerateDirectories(modulesAbsolute)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .OrderByDescending(name => Directory.EnumerateFiles(Path.Combine(modulesAbsolute, name!), "*.js", SearchOption.AllDirectories).Count())
+            .ThenBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault() ?? "sample";
+
+        string webProjectRoot = ResolveWebProjectRoot(repoPath, modulesAbsolute)
+                                ?? Path.GetRelativePath(repoPath, Path.GetDirectoryName(Path.GetDirectoryName(modulesAbsolute) ?? modulesAbsolute) ?? modulesAbsolute)
+                                    .Replace('\\', '/');
+
+        var forbidden = Directory.EnumerateDirectories(repoPath)
+            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
+            .Where(relative =>
+                relative.EndsWith(".Application", StringComparison.OrdinalIgnoreCase)
+                && !webProjectRoot.StartsWith(relative + "/", StringComparison.OrdinalIgnoreCase)
+                && Directory.Exists(Path.Combine(repoPath, relative.Replace('/', Path.DirectorySeparatorChar), "modules")))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var requiredSubfolders = Directory.EnumerateDirectories(modulesAbsolute)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
+            .ToList();
+
+        var allowedRootFiles = Directory.EnumerateFiles(modulesAbsolute)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
+            .ToList();
+
+        return new FrontendLayout(
+            best.ModulesRoot,
+            webProjectRoot,
+            exemplarModule,
+            forbidden,
+            requiredSubfolders,
+            allowedRootFiles);
+    }
+
+    internal static string? RemapForbiddenFrontendPath(string relativePath, FrontendLayout layout)
+    {
+        string normalized = relativePath.Replace('\\', '/').TrimStart('/');
+        foreach (string forbidden in layout.ForbiddenRoots)
+        {
+            if (!normalized.StartsWith(forbidden + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string suffix = normalized[forbidden.Length..].TrimStart('/');
+            if (suffix.StartsWith("Application/modules/", StringComparison.OrdinalIgnoreCase))
+            {
+                suffix = suffix["Application/modules/".Length..];
+            }
+            else if (suffix.StartsWith("modules/", StringComparison.OrdinalIgnoreCase))
+            {
+                suffix = suffix["modules/".Length..];
+            }
+
+            return $"{layout.ModulesRoot}/{suffix}";
+        }
+
+        return null;
+    }
+
+    private static readonly string[] FeatureModuleSubfolderNames =
+    [
+        "controllers", "views", "services", "components", "pages", "hooks", "modules", "routes"
+    ];
+
+    private static bool HasFeatureModuleChildren(string modulesDir) =>
+        Directory.EnumerateDirectories(modulesDir)
+            .Any(moduleDir => FeatureModuleSubfolderNames.Any(name =>
+                Directory.Exists(Path.Combine(moduleDir, name))));
+
+    private static bool IsSolutionSiblingApplicationFolder(string repoPath, string modulesRelativePath)
+    {
+        string[] segments = modulesRelativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2
+               && segments[0].EndsWith(".Application", StringComparison.OrdinalIgnoreCase)
+               && segments[1].Equals("modules", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveWebProjectRoot(string repoPath, string modulesAbsoluteDir)
+    {
+        string? current = Path.GetDirectoryName(modulesAbsoluteDir);
+        for (int depth = 0; depth < 4 && !string.IsNullOrWhiteSpace(current); depth++)
+        {
+            string? csproj = Directory.EnumerateFiles(current, "*.csproj", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault(path =>
+                {
+                    string name = Path.GetFileName(path);
+                    return !name.Contains("WebAPI", StringComparison.OrdinalIgnoreCase)
+                           && !name.Contains("Repository", StringComparison.OrdinalIgnoreCase)
+                           && !name.Contains("UnitTest", StringComparison.OrdinalIgnoreCase)
+                           && !name.Contains("Test", StringComparison.OrdinalIgnoreCase)
+                           && !name.Contains(".Db", StringComparison.OrdinalIgnoreCase);
+                });
+            if (!string.IsNullOrWhiteSpace(csproj))
+            {
+                return Path.GetRelativePath(repoPath, current).Replace('\\', '/');
+            }
+
+            current = Path.GetDirectoryName(current);
+        }
+
+        return null;
+    }
+
     private static void AppendRepositoryImplementationConventions(StringBuilder sb, string repoPath)
     {
         var implementationFiles = Directory.GetFiles(repoPath, "*Repository.cs", SearchOption.AllDirectories)
@@ -457,7 +850,7 @@ static class RagContextComposer
 
         var signals = ExtractTaskSignals(taskPrompt);
         string? exemplar = implementationFiles
-            .OrderByDescending(path => ScoreFile(path, signals))
+            .OrderByDescending(path => ScoreFileCore(Path.GetRelativePath(repoPath, path).Replace('\\', '/'), signals))
             .ThenBy(path => path.Length)
             .FirstOrDefault();
         exemplar ??= implementationFiles.OrderBy(path => path.Length).FirstOrDefault();
@@ -774,7 +1167,31 @@ static class RagContextComposer
         return null;
     }
 
-    private static int ScoreFile(string path, IReadOnlyList<string> signals)
+    private static int ScoreFile(string relativePath, IReadOnlyList<string> signals, FrontendLayout? frontend)
+    {
+        string normalizedPath = relativePath.Replace('\\', '/');
+        int score = ScoreFileCore(relativePath, signals);
+
+        if (frontend is null)
+        {
+            return score;
+        }
+
+        if (normalizedPath.StartsWith(frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith(frontend.WebProjectRoot + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 40;
+        }
+
+        if (frontend.ForbiddenRoots.Any(root => normalizedPath.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            score -= 80;
+        }
+
+        return score;
+    }
+
+    private static int ScoreFileCore(string path, IReadOnlyList<string> signals)
     {
         string fileName = Path.GetFileNameWithoutExtension(path);
         string normalizedPath = path.Replace('\\', '/');
@@ -814,6 +1231,14 @@ static class RagContextComposer
         return content[..maxChars] + "\n\n[Context truncated to keep prompt focused.]";
     }
 }
+
+internal sealed record FrontendLayout(
+    string ModulesRoot,
+    string WebProjectRoot,
+    string ExemplarModuleName,
+    IReadOnlyList<string> ForbiddenRoots,
+    IReadOnlyList<string> RequiredSubfolders,
+    IReadOnlyList<string> AllowedRootFileNames);
 
 readonly record struct RagContextBundle(
     string StructureContext,
