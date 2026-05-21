@@ -49,7 +49,22 @@ sealed partial class WorkflowOrchestrator
 
         state.Stage = WorkflowStage.Planning;
         state.AddTimeline("Architecture planning started.");
-        state.Architecture = await _architectureAgent.ExecuteAsync(state, cancellationToken);
+        var architectureResult = await _architectureAgent.ExecuteAsync(state, cancellationToken);
+        if (WorkflowFindingRules.IsAgentFallback(architectureResult))
+        {
+            state.Architecture = architectureResult;
+            state.Stage = WorkflowStage.Blocked;
+            state.AddTimeline("Workflow blocked: architecture agent LLM call failed.");
+            await _mcpAdapter.PublishStatusAsync("Workflow blocked: architecture planning failed.");
+            return state;
+        }
+
+        state.Architecture = WorkflowFindingRules.SanitizeArchitectureResult(architectureResult);
+        if (architectureResult.Summary.Contains("```", StringComparison.Ordinal))
+        {
+            state.AddTimeline("Architecture plan sanitized (removed sample code blocks before implementation).");
+        }
+
         await _mcpAdapter.PublishStatusAsync("Architecture plan completed.");
 
         state.Stage = WorkflowStage.Implementing;
@@ -62,6 +77,25 @@ sealed partial class WorkflowOrchestrator
         await Task.WhenAll(backendTask, frontendTask);
         state.Backend = backendTask.Result;
         state.Frontend = frontendTask.Result;
+
+        if (WorkflowFindingRules.IsAgentFallback(state.Backend))
+        {
+            llmOutputQualityFindings.Add(new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = $"BackendDeveloperAgent LLM call failed: {state.Backend.Summary}"
+            });
+        }
+
+        if (WorkflowFindingRules.IsAgentFallback(state.Frontend))
+        {
+            llmOutputQualityFindings.Add(new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = $"FrontendDeveloperAgent LLM call failed: {state.Frontend.Summary}"
+            });
+        }
+
         await _mcpAdapter.PublishStatusAsync("Backend and frontend implementation plans completed.");
 
         var applyResult = await GeneratedFileApplier.ApplyAsync(state);
@@ -101,7 +135,7 @@ sealed partial class WorkflowOrchestrator
         }
         if (complianceFindings.Count > 0)
         {
-            await _mcpAdapter.PublishStatusAsync($"Detected {complianceFindings.Count} backend contract gaps.");
+            await _mcpAdapter.PublishStatusAsync($"Detected {complianceFindings.Count} contract compliance gap(s).");
         }
         if (WorkflowFindingRules.HasBlockingFindings(complianceFindings))
         {

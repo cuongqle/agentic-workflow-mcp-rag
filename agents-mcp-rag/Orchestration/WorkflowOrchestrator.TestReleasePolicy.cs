@@ -71,10 +71,10 @@ sealed partial class WorkflowOrchestrator
             return;
         }
 
-        state.Audit.Findings.RemoveAll(WorkflowFindingRules.IsAutomatedComplianceFinding);
-        var refreshedCompliance = ContractComplianceValidator.CollectComplianceFindings(state);
-        refreshedCompliance.AddRange(llmOutputQualityFindings);
-        state.Audit.Findings.AddRange(refreshedCompliance);
+        state.Audit.Findings.Clear();
+        var refreshedFindings = ContractComplianceValidator.CollectComplianceFindings(state);
+        refreshedFindings.AddRange(llmOutputQualityFindings);
+        state.Audit.Findings.AddRange(refreshedFindings);
         if (state.BuildValidation is not null)
         {
             state.Audit.Findings.AddRange(state.BuildValidation.Findings);

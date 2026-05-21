@@ -562,6 +562,12 @@ static class GeneratedFileApplier
                 return false;
             }
 
+            if (!PlaceholderImplementationGuard.TryValidate(trimmed, out string placeholderReason))
+            {
+                reason = placeholderReason;
+                return false;
+            }
+
             if (!ValidateDynamicLayerConventions(relativePath, trimmed, conventions, repoPath, out reason))
             {
                 return false;

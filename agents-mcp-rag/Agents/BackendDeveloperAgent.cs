@@ -2,6 +2,16 @@ using Microsoft.SemanticKernel;
 
 sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
 {
+    private const string JsonOutputSchema = """
+        Return strictly valid JSON:
+        {
+          "summary": "short summary",
+          "files": [
+            { "path": "relative/path/from/repo/root.ext", "content": "full file content" }
+          ]
+        }
+        """;
+
     public BackendDeveloperAgent(Kernel kernel) : base(kernel)
     {
     }
@@ -10,50 +20,40 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
 
     protected override string BuildPrompt(WorkflowState state)
     {
-        return $@"You are the backend developer agent.
-Implement backend scope from architecture plan.
+        string architecturePlan = state.Architecture?.Summary ?? string.Empty;
+        var requiredPaths = WorkflowFindingRules.ExtractBackendPaths(architecturePlan);
+        string checklist = requiredPaths.Count == 0
+            ? "(extract file paths and requirements from the architecture section above)"
+            : string.Join("\n", requiredPaths.Select(path => $"- {path}"));
 
-Task: {state.Task.Title}
-Architecture:
-{state.Architecture?.Summary}
-Unified RAG context:
-{state.CombinedRagContext}
+        return $"""
+            You are the backend developer agent.
+            Implement the architecture plan. Use RAG exemplars for all code structure and syntax.
 
-IMPORTANT: Return strictly valid JSON with this shape:
-{{
-  ""summary"": ""short backend summary"",
-  ""files"": [
-    {{
-      ""path"": ""relative/path/from/repo/root.ext"",
-      ""content"": ""full file content""
-    }}
-  ]
-}}
+            Task: {state.Task.Title}
+            Task detail: {state.Task.Description}
 
-Include real backend files that should be created/updated inside the target repository.
-Paths must be repository-relative and should target actual source directories.
-Include repository/entity/index/test files when needed to match legacy architecture patterns.
-For every new production type you introduce (repository, service, controller, domain class, etc.), add a matching {{Name}}Tests.cs file in the test folder and style already used in this repository when exemplar *Tests.cs files exist for that layer.
-Test projects: use only packages and usings already present in sibling *Tests.cs files (see test package conventions in RAG). Do not introduce Moq/xUnit/NSubstitute unless exemplars already do — prefer bootstrap/HotSpot integration tests.
-In tests, assign and compare using the CLR types from entity property context in RAG (temporal properties need DateTime/DateTimeOffset expressions, not string literals).
-Do NOT invent generic roots like src/, app/, backend/, frontend/ unless they already exist in legacy context.
-Follow layer contracts and path conventions from unified RAG context.
-Use the same project paths, naming, and inheritance patterns as exemplar files in the same layer.
-Implementation must be concrete (no TODO/placeholder comments) with real method bodies where the exemplars include them.
-Mirror the closest exemplar files in RAG context for the same layer (naming, base types, dependencies, and method bodies). Only call members that exist on the types/interfaces you use.
-When you add a role interface (I*Repository, I*Service, etc.), the implementation class must implement every method declared on that interface (see interface+implementation pairing rules in RAG context).
-When adding an index for a new entity, define the entity class properties first; the index Map projection must only reference properties declared on that entity (see entity+index pairing rules and property list in RAG context).
-If you generate both entity and index files in one response, use identical property names in both.
-When introducing new DI interfaces, do NOT return bootstrap/composition-root .cs files — follow DI registration scope rules in unified RAG context (workflow merges Add* lines into the discovered registration block).
-Workflow registers only interface+implementation pairs you introduce in proposed files; never add registrations for types already wired in bootstrap/composition-root exemplars.
-Never rewrite bootstrap files (usings, namespace, provider fields, or registration method structure).
-Never modify pre-existing interfaces or store/base implementations. Do not invent SaveChanges/Update/DbContext APIs — use only store members shown in contract context.
-Include required using directives consistent with sibling files in the same layer.";
+            Architecture plan (requirements only — prose descriptions per file; implement from RAG, not from any sample code):
+            {architecturePlan}
+
+            Backend file paths identified from architecture (each must be in files[] with a full implementation matching its description):
+            {checklist}
+
+            Rules:
+            - Implement every path listed in BACKEND_FILES (and backend tasks described in the architecture plan).
+            - Match each file's described responsibilities using the closest layer exemplar in RAG.
+            - Return complete source files only: no stubs, TODO, NotImplementedException, or placeholder comments.
+            - Every checklist path above must appear in files[].
+
+            Unified RAG context (exemplars and conventions):
+            {state.CombinedRagContext}
+
+            {JsonOutputSchema}
+            """;
     }
 
-    protected override IReadOnlyList<AgentFinding> BuildFallbackFindings()
-    {
-        return new List<AgentFinding>
+    protected override IReadOnlyList<AgentFinding> BuildFallbackFindings() =>
+        new List<AgentFinding>
         {
             new()
             {
@@ -61,5 +61,4 @@ Include required using directives consistent with sibling files in the same laye
                 Message = "Backend implementation used fallback guidance; verify generated changes manually."
             }
         };
-    }
 }

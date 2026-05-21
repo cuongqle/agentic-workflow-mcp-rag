@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Text.Json;
-using agents_mcp_rag.Infrastructure;
 using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 abstract class LlmWorkflowAgentBase : IWorkflowAgent
 {
@@ -23,9 +23,12 @@ abstract class LlmWorkflowAgentBase : IWorkflowAgent
         List<GeneratedFile> generatedFiles = new();
         try
         {
-            string prompt = PromptTemplateEscaper.EscapeLiteralHandlebars(BuildPrompt(state));
-            var response = await _kernel.InvokePromptAsync(prompt, cancellationToken: cancellationToken);
-            string raw = response.ToString();
+            string prompt = BuildPrompt(state);
+            var chat = _kernel.GetRequiredService<IChatCompletionService>();
+            var history = new ChatHistory();
+            history.AddUserMessage(prompt);
+            var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: cancellationToken);
+            string raw = response.FirstOrDefault()?.Content ?? string.Empty;
             if (TryParseStructuredResponse(raw, out string parsedSummary, out List<GeneratedFile> parsedFiles))
             {
                 summary = parsedSummary;

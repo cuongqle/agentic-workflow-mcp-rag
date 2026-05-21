@@ -2,6 +2,16 @@ using Microsoft.SemanticKernel;
 
 sealed class FrontendDeveloperAgent : LlmWorkflowAgentBase
 {
+    private const string JsonOutputSchema = """
+        Return strictly valid JSON:
+        {
+          "summary": "short summary",
+          "files": [
+            { "path": "relative/path/from/repo/root.ext", "content": "full file content" }
+          ]
+        }
+        """;
+
     public FrontendDeveloperAgent(Kernel kernel) : base(kernel)
     {
     }
@@ -10,33 +20,39 @@ sealed class FrontendDeveloperAgent : LlmWorkflowAgentBase
 
     protected override string BuildPrompt(WorkflowState state)
     {
-        return $@"You are the frontend developer agent.
-Implement frontend scope from architecture plan.
+        string architecturePlan = state.Architecture?.Summary ?? string.Empty;
+        var requiredPaths = WorkflowFindingRules.ExtractFrontendPaths(architecturePlan);
+        string checklist = requiredPaths.Count == 0
+            ? "(extract file paths and requirements from FRONTEND_FILES in the architecture section above)"
+            : string.Join("\n", requiredPaths.Select(path => $"- {path}"));
 
-Task: {state.Task.Title}
-Architecture:
-{state.Architecture?.Summary}
-Unified RAG context:
-{state.CombinedRagContext}
+        return $"""
+            You are the frontend developer agent.
+            Implement the architecture plan. Use RAG exemplars for module layout and syntax.
 
-IMPORTANT: Return strictly valid JSON with this shape:
-{{
-  ""summary"": ""short frontend summary"",
-  ""files"": [
-    {{
-      ""path"": ""relative/path/from/repo/root.ext"",
-      ""content"": ""full file content""
-    }}
-  ]
-}}
+            Task: {state.Task.Title}
+            Task detail: {state.Task.Description}
 
-Include real frontend files that should be created/updated in the target repository.
-Paths must be repository-relative. Follow the discovered frontend contract and exemplar paths in unified RAG context (layout mode, modules root, subfolders, root files). Do not invent paths that contradict that contract.";
+            Architecture plan (requirements only — implement from RAG, not from any sample code):
+            {architecturePlan}
+
+            Frontend file paths from architecture (each must be in files[] with full content matching its description):
+            {checklist}
+
+            Rules:
+            - Implement every path listed in FRONTEND_FILES (and frontend tasks described in the architecture plan).
+            - Follow the discovered module layout in RAG; do not invent new project roots.
+            - Return complete source files only.
+
+            Unified RAG context (exemplars and conventions):
+            {state.CombinedRagContext}
+
+            {JsonOutputSchema}
+            """;
     }
 
-    protected override IReadOnlyList<AgentFinding> BuildFallbackFindings()
-    {
-        return new List<AgentFinding>
+    protected override IReadOnlyList<AgentFinding> BuildFallbackFindings() =>
+        new List<AgentFinding>
         {
             new()
             {
@@ -44,5 +60,4 @@ Paths must be repository-relative. Follow the discovered frontend contract and e
                 Message = "Frontend implementation used fallback guidance; verify generated changes manually."
             }
         };
-    }
 }

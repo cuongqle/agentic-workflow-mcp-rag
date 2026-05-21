@@ -17,7 +17,7 @@ internal static class TestCoverageAuditor
         }
 
         var proposedPaths = new HashSet<string>(
-            GetAllProposedFiles(state).Select(f => f.RelativePath.Replace('\\', '/')),
+            WorkflowFindingRules.GetAllProposedFiles(state).Select(f => f.RelativePath.Replace('\\', '/')),
             StringComparer.OrdinalIgnoreCase);
 
         foreach (var convention in conventions)
@@ -116,7 +116,7 @@ internal static class TestCoverageAuditor
     private static bool HasMatchingTest(WorkflowState state, string testsDir, string productionBaseName)
     {
         string expectedFileName = $"{productionBaseName}Tests.cs";
-        var proposedFiles = GetAllProposedFiles(state);
+        var proposedFiles = WorkflowFindingRules.GetAllProposedFiles(state);
         if (proposedFiles.Any(file => Path.GetFileName(file.RelativePath)
                 .Equals(expectedFileName, StringComparison.OrdinalIgnoreCase)))
         {
@@ -261,13 +261,6 @@ internal static class TestCoverageAuditor
     private static bool IsTestArtifactPath(string relativePath)
     {
         return BuildFailureClassifier.IsTestArtifactPath(relativePath);
-    }
-
-    private static List<GeneratedFile> GetAllProposedFiles(WorkflowState state)
-    {
-        return (state.Backend?.ProposedFiles ?? new List<GeneratedFile>())
-            .Concat(state.Recovery?.ProposedFiles ?? new List<GeneratedFile>())
-            .ToList();
     }
 
     private static string ToRelativePath(string repoPath, string absolutePath)

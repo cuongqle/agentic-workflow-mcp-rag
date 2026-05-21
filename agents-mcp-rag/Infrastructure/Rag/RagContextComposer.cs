@@ -40,6 +40,7 @@ static class RagContextComposer
         var sb = new StringBuilder();
         sb.AppendLine("Legacy implementation exemplars (use these conventions):");
         sb.AppendLine(contract.FormatAgentPreamble(InferTargetEntityName(taskPrompt) ?? "NewEntity"));
+        AppendImplementationRules(sb);
         sb.AppendLine();
 
         var signals = ExtractTaskSignals(taskPrompt);
@@ -102,6 +103,16 @@ static class RagContextComposer
         }
 
         return sb.ToString();
+    }
+
+    private static void AppendImplementationRules(StringBuilder sb)
+    {
+        sb.AppendLine();
+        sb.AppendLine("Implementation rules (apply + compliance enforce these):");
+        sb.AppendLine("- Mirror exemplar files in the sections below for the same layer (naming, inheritance, APIs).");
+        sb.AppendLine("- Ship complete code: real method bodies; no stubs, TODO, or NotImplementedException.");
+        sb.AppendLine("- New role interfaces need full implementations; entity/index property names must match.");
+        sb.AppendLine("- Do not rewrite bootstrap/composition-root files or pre-existing store/base contracts.");
     }
 
     private static void AppendCorpusSummary(StringBuilder sb, IReadOnlyList<string> files, string repoPath)
@@ -247,9 +258,11 @@ static class RagContextComposer
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (!tokens.Any(t => t.Equals("Employee", StringComparison.OrdinalIgnoreCase)))
+        string? targetEntity = InferTargetEntityName(taskPrompt);
+        if (!string.IsNullOrWhiteSpace(targetEntity)
+            && !tokens.Any(t => t.Equals(targetEntity, StringComparison.OrdinalIgnoreCase)))
         {
-            tokens.Add("Employee");
+            tokens.Add(targetEntity);
         }
 
         return tokens;
