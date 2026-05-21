@@ -194,15 +194,21 @@ sealed class BuildValidationAgent : IWorkflowAgent
     private static bool ValidateProductionProjects(string repoPath, out List<AgentFinding> failures)
     {
         failures = new List<AgentFinding>();
-        var productionProjects = Directory
-            .EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
-            .Where(path => !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !BuildFailureClassifier.IsTestProjectPath(path))
-            .OrderBy(path => path.Length)
-            .ToList();
+        IReadOnlyList<string> solutionProjects = SolutionProjectCatalog.GetSolutionProjectRelativePaths(repoPath);
+        var productionProjects = solutionProjects.Count > 0
+            ? solutionProjects
+                .Where(path => !BuildFailureClassifier.IsTestProjectPath(path))
+                .Select(path => Path.Combine(repoPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                .ToList()
+            : Directory
+                .EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
+                .Where(path => !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
+                            && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                            && !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
+                            && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase))
+                .Where(path => !BuildFailureClassifier.IsTestProjectPath(path))
+                .OrderBy(path => path.Length)
+                .ToList();
 
         if (productionProjects.Count == 0)
         {

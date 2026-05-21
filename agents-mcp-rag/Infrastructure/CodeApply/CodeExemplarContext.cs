@@ -136,41 +136,6 @@ static class CodeExemplarContext
         }
     }
 
-    internal static string BuildForCompilationFix(string repoPath, IReadOnlyList<string> allowedFiles)
-    {
-        if (allowedFiles.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var sb = new StringBuilder();
-        sb.AppendLine("Implementation exemplars for files being fixed:");
-
-        var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var target in allowedFiles.Where(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).Take(12))
-        {
-            string? exemplar = FindClosestExemplar(repoPath, target);
-            if (string.IsNullOrWhiteSpace(exemplar) || !added.Add(exemplar))
-            {
-                continue;
-            }
-
-            AppendFileExcerpt(sb, repoPath, exemplar, $"similar to {target}");
-
-            if (Path.GetFileName(target).EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
-            {
-                string entityName = Path.GetFileNameWithoutExtension(target).Replace("Index", string.Empty, StringComparison.Ordinal);
-                string? entityExemplar = FindClosestExemplar(repoPath, $"Entities/{entityName}.cs");
-                if (!string.IsNullOrWhiteSpace(entityExemplar) && added.Add(entityExemplar))
-                {
-                    AppendFileExcerpt(sb, repoPath, entityExemplar, $"entity paired with {target}");
-                }
-            }
-        }
-
-        return sb.Length > 80 ? sb.ToString() : string.Empty;
-    }
-
     internal static string? FindClosestExemplar(string repoPath, string targetRelativePath)
     {
         string targetFileName = Path.GetFileName(targetRelativePath);

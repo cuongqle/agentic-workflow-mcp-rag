@@ -49,46 +49,6 @@ internal static class InterfaceImplementationGuard
         return sb.ToString();
     }
 
-    internal static string? BuildCompilationFixContext(
-        string repoPath,
-        IReadOnlyList<AgentFinding>? buildFindings,
-        IReadOnlyList<string> allowedFiles)
-    {
-        var lines = new List<string>();
-        foreach (var finding in buildFindings ?? Array.Empty<AgentFinding>())
-        {
-            foreach (Match match in Regex.Matches(
-                         finding.Message,
-                         @"does not implement interface member\s+'([A-Za-z_][A-Za-z0-9_.<>,\s\?]+)'",
-                         RegexOptions.IgnoreCase))
-            {
-                string memberRef = match.Groups[1].Value.Trim();
-                string? interfaceName = memberRef.Contains('.')
-                    ? memberRef[..memberRef.IndexOf('.')]
-                    : null;
-                if (string.IsNullOrWhiteSpace(interfaceName))
-                {
-                    continue;
-                }
-
-                string? interfaceContent = ResolveInterfaceContent(repoPath, interfaceName, allowedFiles);
-                if (!string.IsNullOrWhiteSpace(interfaceContent))
-                {
-                    lines.Add($"CS0535: implement missing member on {interfaceName} — required signature from interface:");
-                    lines.Add(interfaceContent.Length > 1200 ? interfaceContent[..1200] + "\n// [truncated]" : interfaceContent);
-                }
-
-                InterfaceImplementationPair? exemplar = FindBestImplementationPair(repoPath, interfaceName);
-                if (exemplar is not null)
-                {
-                    lines.Add($"Mirror implementation style from {exemplar.ImplementationRelativePath} for interface-specific methods.");
-                }
-            }
-        }
-
-        return lines.Count == 0 ? null : string.Join('\n', lines);
-    }
-
     internal static bool TryValidate(
         string repoPath,
         string relativePath,
@@ -113,7 +73,8 @@ internal static class InterfaceImplementationGuard
         var satisfiedMethods = CollectSatisfiedMethods(repoPath, content, classMatch.Groups[2].Value);
         foreach (string iface in implementedInterfaces)
         {
-            if (!interfaceDirectMembers.TryGetValue(iface, out HashSet<string>? required) || required.Count == 0)
+            if (!TryResolveRequiredMembers(iface, interfaceDirectMembers, out HashSet<string>? required)
+                || required.Count == 0)
             {
                 continue;
             }
@@ -194,6 +155,27 @@ internal static class InterfaceImplementationGuard
         return satisfied;
     }
 
+    private static bool TryResolveRequiredMembers(
+        string implementedInterface,
+        IReadOnlyDictionary<string, HashSet<string>> interfaceDirectMembers,
+        out HashSet<string>? required)
+    {
+        required = null;
+        if (interfaceDirectMembers.TryGetValue(implementedInterface, out required))
+        {
+            return true;
+        }
+
+        string openGeneric = BuildFailureClassifier.StripGenericArity(implementedInterface);
+        if (!openGeneric.Equals(implementedInterface, StringComparison.Ordinal)
+            && interfaceDirectMembers.TryGetValue(openGeneric, out required))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static List<string> ParseImplementedInterfaces(string inheritanceClause) =>
         inheritanceClause
             .Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -260,29 +242,6 @@ internal static class InterfaceImplementationGuard
         }
 
         return content[braceStart..];
-    }
-
-    private static string? ResolveInterfaceContent(
-        string repoPath,
-        string interfaceName,
-        IReadOnlyList<string> allowedFiles)
-    {
-        string? proposed = allowedFiles
-            .FirstOrDefault(path => Path.GetFileNameWithoutExtension(path).Equals(interfaceName, StringComparison.Ordinal));
-        if (!string.IsNullOrWhiteSpace(proposed))
-        {
-            string absolute = Path.Combine(repoPath, proposed.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(absolute))
-            {
-                return File.ReadAllText(absolute);
-            }
-        }
-
-        return Directory
-            .EnumerateFiles(repoPath, $"{interfaceName}.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
-            .Select(File.ReadAllText)
-            .FirstOrDefault();
     }
 
     private static string? ResolveTypeContent(string repoPath, string typeName)

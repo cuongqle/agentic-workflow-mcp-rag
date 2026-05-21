@@ -9,6 +9,7 @@ public sealed class AppSettings
     public string RepoPath { get; init; } = string.Empty;
     public int MaxRecoveryAttempts { get; init; } = 2;
     public int MaxCompilationFixAttempts { get; init; } = 3;
+    public CompilationFixContextOptions CompilationFixContext { get; init; } = new();
     public bool UseHybridRag { get; init; } = true;
     public double RagLexicalWeight { get; init; } = 0.55;
     public double RagVectorWeight { get; init; } = 0.45;

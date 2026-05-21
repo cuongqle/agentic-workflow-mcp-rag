@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace agents_mcp_rag.Infrastructure;
@@ -256,12 +257,11 @@ internal static class ProjectPackageAuditor
     private static HashSet<string> ReadPackageIds(string csprojPath)
     {
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!File.Exists(csprojPath))
+        if (!TryParseCsprojDocument(csprojPath, out XDocument? doc) || doc is null)
         {
             return ids;
         }
 
-        var doc = XDocument.Load(csprojPath);
         foreach (var element in doc.Descendants().Where(e => e.Name.LocalName == "PackageReference"))
         {
             string? include = element.Attribute("Include")?.Value;
@@ -274,11 +274,64 @@ internal static class ProjectPackageAuditor
         return ids;
     }
 
+    /// <summary>
+    /// Skips empty, non-XML, or agent-corrupted .csproj files so package audit does not abort apply.
+    /// </summary>
+    private static bool TryParseCsprojDocument(string csprojPath, out XDocument? document)
+    {
+        document = null;
+        if (!File.Exists(csprojPath))
+        {
+            return false;
+        }
+
+        string content;
+        try
+        {
+            content = File.ReadAllText(csprojPath);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        content = content.TrimStart('\uFEFF');
+        int i = 0;
+        while (i < content.Length && char.IsWhiteSpace(content[i]))
+        {
+            i++;
+        }
+
+        if (i >= content.Length || content[i] != '<')
+        {
+            return false;
+        }
+
+        try
+        {
+            document = XDocument.Parse(content, LoadOptions.None);
+            return string.Equals(document.Root?.Name.LocalName, "Project", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsParsableCsproj(string csprojPath) => TryParseCsprojDocument(csprojPath, out _);
+
     private static List<string> DiscoverTestProjectPaths(string repoPath) =>
         Directory
             .EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
             .Where(BuildFailureClassifier.IsTestProjectPath)
             .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            .Where(IsParsableCsproj)
             .ToList();
 
     private static string? DiscoverPrimaryTestProjectPath(string repoPath) =>
@@ -294,7 +347,11 @@ internal static class ProjectPackageAuditor
         {
             if (Directory.Exists(absoluteDir))
             {
-                string? csproj = Directory.GetFiles(absoluteDir, "*.csproj").FirstOrDefault();
+                string? csproj = Directory
+                    .GetFiles(absoluteDir, "*.csproj")
+                    .Where(IsParsableCsproj)
+                    .OrderByDescending(BuildFailureClassifier.IsTestProjectPath)
+                    .FirstOrDefault();
                 if (!string.IsNullOrWhiteSpace(csproj))
                 {
                     return csproj;

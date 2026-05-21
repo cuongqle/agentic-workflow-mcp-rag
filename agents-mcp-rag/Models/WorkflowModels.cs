@@ -1,3 +1,5 @@
+using agents_mcp_rag.Infrastructure;
+
 enum WorkflowStage
 {
     Queued,
@@ -54,6 +56,7 @@ sealed class WorkflowState
     public string ProjectStructureContext { get; init; } = string.Empty;
     public string LegacyImplementationContext { get; init; } = string.Empty;
     public string CombinedRagContext { get; init; } = string.Empty;
+    public RepoContract? Contract { get; set; }
     public WorkflowStage Stage { get; set; } = WorkflowStage.Queued;
     public int RecoveryAttemptCount { get; set; }
 
@@ -65,9 +68,9 @@ sealed class WorkflowState
     public AgentResult? Audit { get; set; }
     public AgentResult? Recovery { get; set; }
     public List<string> CompilationFixAllowedFiles { get; set; } = new();
+    public string CompilationFixExemplarContext { get; set; } = string.Empty;
     public List<string> ComplianceIssues { get; set; } = new();
     public HashSet<string> DeferredTestEntities { get; } = new(StringComparer.OrdinalIgnoreCase);
-    public string CompilationContractContext { get; set; } = string.Empty;
     public string? PullRequestUrl { get; set; }
     public string? PullRequestStatus { get; set; }
 

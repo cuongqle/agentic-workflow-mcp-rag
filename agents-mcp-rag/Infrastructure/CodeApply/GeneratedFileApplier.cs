@@ -10,8 +10,8 @@ static class GeneratedFileApplier
         var rejected = new List<ApplyIssue>();
         var appliedChanges = new List<AppliedFileChange>();
         string repoRoot = Path.GetFullPath(state.RepoPath);
-        var canonical = DetectCanonicalRoots(state.RepoPath);
-        var conventions = LayerConventionProfileBuilder.Build(state.RepoPath);
+        RepoContract contract = state.Contract ?? RepoContractDiscoverer.Discover(state.RepoPath);
+        var conventions = contract.LayerConventions;
         var generatedFiles = OrderFilesForApply(EnumerateGeneratedFiles(state).ToList());
         var workflowProposedPaths = new HashSet<string>(
             generatedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
@@ -35,7 +35,16 @@ static class GeneratedFileApplier
                 continue;
             }
 
-            relativePath = NormalizeToCanonical(relativePath, generatedFile.Content, canonical);
+            relativePath = contract.ResolveCanonicalRelativePath(relativePath, generatedFile.Content);
+            if (relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                rejected.Add(new ApplyIssue(
+                    relativePath,
+                    "Rejected generated artifact path (obj/bin). Fix the owning .csproj or Properties/AssemblyInfo.cs instead."));
+                continue;
+            }
+
             string? declaredType = TryExtractDeclaredTypeName(generatedFile.Content);
             if (!string.IsNullOrWhiteSpace(declaredType)
                 && declaredTypePaths.TryGetValue(declaredType, out string? priorPath))
@@ -66,7 +75,11 @@ static class GeneratedFileApplier
                 Directory.CreateDirectory(directory);
             }
 
-            string content = NormalizeContent(relativePath, generatedFile.Content, canonical, typeNamespaceCatalog);
+            string content = NormalizeContent(
+                relativePath,
+                generatedFile.Content,
+                contract.RepositoryInterfacesNamespace,
+                typeNamespaceCatalog);
             content = TryNormalizeLayerTestContent(relativePath, content, state.RepoPath);
             bool existedBefore = File.Exists(fullPath);
             string? existingOnDisk = existedBefore ? File.ReadAllText(fullPath) : null;
@@ -111,6 +124,13 @@ static class GeneratedFileApplier
                 content = mergedBootstrap;
             }
 
+            if (contract.Entity is not null
+                && !contract.Entity.ValidateEntityContent(relativePath, content, out string entityReason))
+            {
+                rejected.Add(new ApplyIssue(relativePath, entityReason));
+                continue;
+            }
+
             if (!IsLikelyValidSource(
                     relativePath,
                     content,
@@ -139,13 +159,6 @@ static class GeneratedFileApplier
         foreach (string repaired in RepairCompositionRootFiles(state.RepoPath))
         {
             applied.Add(repaired);
-        }
-
-        foreach (string packageChange in ProjectPackageAuditor.EnsureMissingPackages(
-                     state.RepoPath,
-                     proposedFiles: generatedFiles))
-        {
-            applied.Add(packageChange);
         }
 
         return Task.FromResult(new ApplyResult(applied, rejected, appliedChanges));
@@ -200,127 +213,6 @@ static class GeneratedFileApplier
         }
 
         return Task.CompletedTask;
-    }
-
-    private static string NormalizeToCanonical(string relativePath, string content, CanonicalRoots roots)
-    {
-        string path = relativePath.Replace('\\', '/').TrimStart('/');
-        string fileName = Path.GetFileName(path);
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return path;
-        }
-
-        if (fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(roots.WebApiControllers))
-        {
-            return $"{roots.WebApiControllers}/{fileName}";
-        }
-
-        if (fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase)
-            && fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(roots.RepositoryInterfaces))
-        {
-            return $"{roots.RepositoryInterfaces}/{fileName}";
-        }
-
-        if (!fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase)
-            && fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !fileName.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(roots.RepositoryRoot))
-        {
-            return $"{roots.RepositoryRoot}/{fileName}";
-        }
-
-        if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(roots.RepositoryIndexes))
-        {
-            return $"{roots.RepositoryIndexes}/{fileName}";
-        }
-
-        if (path.Contains("/Entities/", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(roots.RepositoryEntities))
-        {
-            return $"{roots.RepositoryEntities}/{fileName}";
-        }
-
-        if (IsEntityLikeFile(path, fileName, content)
-            && !string.IsNullOrWhiteSpace(roots.RepositoryEntities))
-        {
-            return $"{roots.RepositoryEntities}/{fileName}";
-        }
-
-        if (path.Contains("/RepositoryTest/", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(roots.UnitTestRepositoryTests))
-        {
-            return $"{roots.UnitTestRepositoryTests}/{fileName}";
-        }
-
-        if (roots.FrontendLayout is not null)
-        {
-            string? remapped = RagContextComposer.RemapForbiddenFrontendPath(path, roots.FrontendLayout);
-            if (!string.IsNullOrWhiteSpace(remapped))
-            {
-                path = remapped;
-            }
-
-            if ((fileName.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
-                 || fileName.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
-                 || fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
-                 || fileName.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase)
-                 || fileName.EndsWith(".jsx", StringComparison.OrdinalIgnoreCase)
-                 || fileName.EndsWith(".vue", StringComparison.OrdinalIgnoreCase))
-                && path.Contains("/modules/", StringComparison.OrdinalIgnoreCase)
-                && !path.StartsWith(roots.FrontendLayout.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                int modulesIndex = path.IndexOf("/modules/", StringComparison.OrdinalIgnoreCase);
-                string moduleSuffix = path[(modulesIndex + "/modules/".Length)..];
-                path = $"{roots.FrontendLayout.ModulesRoot}/{moduleSuffix}";
-            }
-
-            path = RagContextComposer.NormalizeFeatureModuleRelativePath(path, roots.FrontendLayout, content);
-        }
-
-        return path;
-    }
-
-    private static bool IsEntityLikeFile(string path, string fileName, string content)
-    {
-        if (!fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("Expression.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        string className = Path.GetFileNameWithoutExtension(fileName);
-        if (!content.Contains($"class {className}", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (path.Contains("/Entities/", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        bool hasSimpleModelSignals = content.Contains("{ get; set; }", StringComparison.Ordinal)
-                                     || content.Contains("[DataMember", StringComparison.Ordinal)
-                                     || content.Contains("[JsonProperty", StringComparison.Ordinal);
-        return hasSimpleModelSignals;
     }
 
     private static string? TryExtractDeclaredTypeName(string content)
@@ -453,29 +345,22 @@ static class GeneratedFileApplier
     private static string NormalizeContent(
         string relativePath,
         string content,
-        CanonicalRoots roots,
+        string? repositoryInterfacesNamespace,
         TypeNamespaceCatalog typeNamespaceCatalog)
     {
         string fileName = Path.GetFileName(relativePath);
-        if (string.IsNullOrWhiteSpace(fileName))
+        if (!string.IsNullOrWhiteSpace(fileName)
+            && fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
+            && !fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(repositoryInterfacesNamespace)
+            && content.Contains("I", StringComparison.Ordinal)
+            && content.Contains("Repository", StringComparison.Ordinal)
+            && !content.Contains($"using {repositoryInterfacesNamespace};", StringComparison.Ordinal))
         {
-            return content;
+            content = InsertUsingDirective(content, $"using {repositoryInterfacesNamespace};");
         }
 
-        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!string.IsNullOrWhiteSpace(roots.RepositoryInterfacesNamespace)
-                && content.Contains("I", StringComparison.Ordinal)
-                && content.Contains("Repository", StringComparison.Ordinal)
-                && !content.Contains($"using {roots.RepositoryInterfacesNamespace};", StringComparison.Ordinal))
-            {
-                return InsertUsingDirective(content, $"using {roots.RepositoryInterfacesNamespace};");
-            }
-        }
-
-        content = EnsureReferencedTypeUsings(content, typeNamespaceCatalog);
-        return content;
+        return EnsureReferencedTypeUsings(content, typeNamespaceCatalog);
     }
 
     private static string EnsureReferencedTypeUsings(string content, TypeNamespaceCatalog catalog)
@@ -558,97 +443,6 @@ static class GeneratedFileApplier
         }
 
         return builder.ToString();
-    }
-
-    private static CanonicalRoots DetectCanonicalRoots(string repoPath)
-    {
-        string? webApiControllers = Directory
-            .EnumerateDirectories(repoPath, "Controllers", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .Where(relative => relative.Contains(".WebAPI/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains(".WebApi/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault()
-            ?? Directory
-                .EnumerateDirectories(repoPath, "Controllers", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-                .Where(relative => relative.Contains("WebAPI", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(relative => relative.Length)
-                .FirstOrDefault();
-
-        string? repositoryInterfaces = Directory
-            .EnumerateDirectories(repoPath, "Interfaces", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .Where(relative => relative.Contains(".Repository/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains("Repository/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault();
-
-        string? repositoryIndexes = Directory
-            .EnumerateDirectories(repoPath, "Indexes", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .Where(relative => relative.Contains(".Repository/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains("Repository/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault()
-            ?? Directory
-                .EnumerateDirectories(repoPath, "Index", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-                .Where(relative => relative.Contains(".Repository/", StringComparison.OrdinalIgnoreCase)
-                                || relative.Contains("Repository/", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(relative => relative.Length)
-                .FirstOrDefault();
-
-        string? repositoryEntities = Directory
-            .EnumerateDirectories(repoPath, "Entities", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .Where(relative => relative.Contains(".Repository/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains("Repository/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault();
-
-        string? repositoryRoot = Directory
-            .EnumerateFiles(repoPath, "*Repository.cs", SearchOption.AllDirectories)
-            .Where(path => !Path.GetFileName(path).StartsWith("I", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !Path.GetFileName(path).Equals("Repository.cs", StringComparison.OrdinalIgnoreCase))
-            .Select(path => Path.GetRelativePath(repoPath, Path.GetDirectoryName(path) ?? string.Empty).Replace('\\', '/'))
-            .Where(relative => relative.Contains(".Repository/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains("Repository/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault();
-
-        string? repositoryInterfacesNamespace = null;
-        if (!string.IsNullOrWhiteSpace(repositoryInterfaces))
-        {
-            string interfacesAbsolute = Path.Combine(repoPath, repositoryInterfaces.Replace('/', Path.DirectorySeparatorChar));
-            string? sampleInterfaceFile = Directory.EnumerateFiles(interfacesAbsolute, "I*Repository.cs", SearchOption.TopDirectoryOnly).FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(sampleInterfaceFile))
-            {
-                repositoryInterfacesNamespace = File.ReadLines(sampleInterfaceFile)
-                    .Select(line => line.Trim())
-                    .Where(line => line.StartsWith("namespace ", StringComparison.Ordinal))
-                    .Select(line => line.Substring("namespace ".Length).Trim())
-                    .FirstOrDefault();
-            }
-        }
-
-        string? unitTestRepositoryTests = Directory
-            .EnumerateDirectories(repoPath, "RepositoryTest", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .Where(relative => relative.Contains(".UnitTest/", StringComparison.OrdinalIgnoreCase)
-                            || relative.Contains("UnitTest/", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(relative => relative.Length)
-            .FirstOrDefault();
-
-        return new CanonicalRoots(
-            webApiControllers,
-            repositoryRoot,
-            repositoryInterfaces,
-            repositoryIndexes,
-            repositoryEntities,
-            repositoryInterfacesNamespace,
-            unitTestRepositoryTests,
-            RagContextComposer.DiscoverFrontendLayout(repoPath));
     }
 
     private static IEnumerable<GeneratedFile> EnumerateGeneratedFiles(WorkflowState state)
@@ -762,6 +556,12 @@ static class GeneratedFileApplier
                 return false;
             }
 
+            if (!CodeExemplarContext.TryValidate(trimmed, out string syntaxReason))
+            {
+                reason = $"C# syntax check failed: {syntaxReason}";
+                return false;
+            }
+
             if (!ValidateDynamicLayerConventions(relativePath, trimmed, conventions, repoPath, out reason))
             {
                 return false;
@@ -790,12 +590,6 @@ static class GeneratedFileApplier
             string fileName = Path.GetFileName(relativePath);
             if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
             {
-                if (!CodeExemplarContext.TryValidate(trimmed, out string syntaxReason))
-                {
-                    reason = $"Test syntax check failed: {syntaxReason}";
-                    return false;
-                }
-
                 if (!TestBootstrapContext.TryValidateTestResolution(trimmed, repoPath, out string bootstrapReason))
                 {
                     reason = bootstrapReason;
@@ -921,6 +715,18 @@ static class GeneratedFileApplier
         if (profile.RequireBaseConstructorCall && !content.Contains("base(", StringComparison.Ordinal))
         {
             reason = $"Dynamic {role} contract failed for {fileName}: expected constructor base(...) call used by existing {role.ToLowerInvariant()} classes.";
+            return false;
+        }
+
+        if (!conventions.ValidateAgainstExemplar(
+                repoPath,
+                relativePath,
+                content,
+                Path.GetFileNameWithoutExtension(fileName),
+                profile,
+                out string exemplarReason))
+        {
+            reason = $"Dynamic {role} contract failed for {fileName}: {exemplarReason}";
             return false;
         }
 
@@ -1232,15 +1038,6 @@ static class GeneratedFileApplier
         return content[braceStart..];
     }
 
-    private readonly record struct CanonicalRoots(
-        string? WebApiControllers,
-        string? RepositoryRoot,
-        string? RepositoryInterfaces,
-        string? RepositoryIndexes,
-        string? RepositoryEntities,
-        string? RepositoryInterfacesNamespace,
-        string? UnitTestRepositoryTests,
-        FrontendLayout? FrontendLayout);
 }
 
 readonly record struct ApplyIssue(string RelativePath, string Reason);

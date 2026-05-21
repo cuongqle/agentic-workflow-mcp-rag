@@ -24,9 +24,9 @@ static class ContractComplianceValidator
         var proposedPaths = new HashSet<string>(
             proposedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
             StringComparer.OrdinalIgnoreCase);
-        var layerProfiles = LayerConventionProfileBuilder.Build(state.RepoPath);
+        RepoContract contract = state.Contract ?? RepoContractDiscoverer.Discover(state.RepoPath);
 
-        foreach (var profile in layerProfiles.GetActiveProfiles())
+        foreach (var profile in contract.LayerConventions.GetActiveProfiles())
         {
             var interfaceConvention = DetectInterfaceConvention(state.RepoPath, profile);
             foreach (string implPath in proposedPaths.Where(path => MatchesProfileImplementation(path, profile)))
@@ -385,45 +385,12 @@ static class ContractComplianceValidator
     {
         var findings = new List<AgentFinding>();
         var proposedFiles = WorkflowFindingRules.GetAllProposedFiles(state);
-        var layerProfiles = LayerConventionProfileBuilder.Build(state.RepoPath);
-        FrontendLayout? frontend = RagContextComposer.DiscoverFrontendLayout(state.RepoPath);
+        RepoContract contract = state.Contract ?? RepoContractDiscoverer.Discover(state.RepoPath);
+        findings.AddRange(contract.CollectFrontendFindings(proposedFiles));
 
-        if (frontend is not null)
+        foreach (var profile in contract.LayerConventions.GetActiveProfiles())
         {
-            foreach (var file in proposedFiles)
-            {
-                string path = file.RelativePath.Replace('\\', '/');
-                string? forbidden = frontend.ForbiddenRoots.FirstOrDefault(root =>
-                    path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(forbidden))
-                {
-                    findings.Add(new AgentFinding
-                    {
-                        Severity = FindingSeverity.High,
-                        Message =
-                            $"Frontend file '{path}' must not be under parallel root '{forbidden}/'. "
-                            + $"Use host project '{frontend.WebProjectRoot}' and feature-modules root '{frontend.ModulesRoot}/'."
-                    });
-                    continue;
-                }
-
-                if (!RagContextComposer.TryValidateFeatureModulePath(path, frontend, out string layoutReason))
-                {
-                    findings.Add(new AgentFinding
-                    {
-                        Severity = FindingSeverity.High,
-                        Message = layoutReason
-                    });
-                }
-            }
-        }
-
-        foreach (var profile in layerProfiles.GetActiveProfiles())
-        {
-            string? canonicalDir = DetectCanonicalDirectoryForFileSuffix(
-                state.RepoPath,
-                profile.FileSuffix,
-                InferPreferredDirectoryName(profile.RoleName));
+            string? canonicalDir = profile.CanonicalDirectory;
 
             foreach (var file in proposedFiles)
             {
@@ -450,11 +417,11 @@ static class ContractComplianceValidator
         foreach (string consumerSuffix in TypeMemberConsistencyGuard.DiscoverConsumerSuffixes(state.RepoPath))
         {
             string filePattern = $"{consumerSuffix}.cs";
-            string? canonicalConsumerDir = DetectCanonicalDirectoryForFileSuffix(
+            string? canonicalConsumerDir = RagContextComposer.DetectCanonicalDirectoryForFileSuffix(
                                                 state.RepoPath,
                                                 filePattern,
                                                 $"{consumerSuffix}es")
-                                            ?? DetectCanonicalDirectoryForFileSuffix(
+                                            ?? RagContextComposer.DetectCanonicalDirectoryForFileSuffix(
                                                 state.RepoPath,
                                                 filePattern,
                                                 consumerSuffix);
@@ -576,49 +543,6 @@ static class ContractComplianceValidator
             LayerUsesInterfaces: true,
             RequireInheritanceClause: withAnyBaseClause > 0,
             RequiredBaseTokens: requiredTokens);
-    }
-
-    private static string InferPreferredDirectoryName(string roleName) =>
-        roleName switch
-        {
-            "Repository" => "Repository",
-            "Controller" => "Controllers",
-            "Service" => "Services",
-            _ => roleName + "s"
-        };
-
-    private static string? DetectCanonicalDirectoryForFileSuffix(
-        string repoPath,
-        string fileSuffix,
-        string? preferredDirectoryName = null)
-    {
-        var matchingFiles = Directory.EnumerateFiles(repoPath, $"*{fileSuffix}", SearchOption.AllDirectories)
-            .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (matchingFiles.Count == 0)
-        {
-            return null;
-        }
-
-        return matchingFiles
-            .Select(path => Path.GetRelativePath(repoPath, Path.GetDirectoryName(path) ?? string.Empty).Replace('\\', '/'))
-            .Where(relative => !string.IsNullOrWhiteSpace(relative))
-            .GroupBy(relative => relative, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new
-            {
-                Directory = group.Key,
-                Count = group.Count(),
-                IsPreferred = !string.IsNullOrWhiteSpace(preferredDirectoryName)
-                              && (group.Key.EndsWith("/" + preferredDirectoryName, StringComparison.OrdinalIgnoreCase)
-                                  || group.Key.Equals(preferredDirectoryName, StringComparison.OrdinalIgnoreCase))
-            })
-            .OrderByDescending(entry => entry.Count)
-            .ThenByDescending(entry => entry.IsPreferred)
-            .ThenBy(entry => entry.Directory.Length)
-            .ThenBy(entry => entry.Directory, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault()
-            ?.Directory;
     }
 
     private static bool ContainsPlaceholderMarkers(string content) =>

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using agents_mcp_rag.Configuration;
 using agents_mcp_rag.Infrastructure;
 
 sealed partial class WorkflowOrchestrator
@@ -13,6 +14,7 @@ sealed partial class WorkflowOrchestrator
     private readonly GitHubMcpAdapter _mcpAdapter;
     private readonly int _maxRecoveryAttempts;
     private readonly int _maxCompilationFixAttempts;
+    private readonly CompilationFixContextOptions _compilationFixContextOptions;
 
     public WorkflowOrchestrator(
         ArchitectureAgent architectureAgent,
@@ -24,7 +26,8 @@ sealed partial class WorkflowOrchestrator
         RecoveryAgent recoveryAgent,
         GitHubMcpAdapter mcpAdapter,
         int maxRecoveryAttempts,
-        int maxCompilationFixAttempts)
+        int maxCompilationFixAttempts,
+        CompilationFixContextOptions? compilationFixContextOptions = null)
     {
         _architectureAgent = architectureAgent;
         _observerAgent = observerAgent;
@@ -36,6 +39,7 @@ sealed partial class WorkflowOrchestrator
         _mcpAdapter = mcpAdapter;
         _maxRecoveryAttempts = Math.Max(1, maxRecoveryAttempts);
         _maxCompilationFixAttempts = Math.Max(1, maxCompilationFixAttempts);
+        _compilationFixContextOptions = compilationFixContextOptions ?? new CompilationFixContextOptions();
     }
 
     public async Task<WorkflowState> RunAsync(WorkflowState state, CancellationToken cancellationToken = default)
@@ -61,6 +65,7 @@ sealed partial class WorkflowOrchestrator
         await _mcpAdapter.PublishStatusAsync("Backend and frontend implementation plans completed.");
 
         var applyResult = await GeneratedFileApplier.ApplyAsync(state);
+        RecordNuGetPackageChanges(state);
         if (applyResult.AppliedFiles.Count > 0)
         {
             state.AddTimeline($"Generated files applied: {string.Join(", ", applyResult.AppliedFiles)}");
@@ -152,10 +157,12 @@ sealed partial class WorkflowOrchestrator
             state.Stage = WorkflowStage.Recovering;
             state.RecoveryAttemptCount++;
             state.AddTimeline($"Recovery attempt {state.RecoveryAttemptCount} started.");
+            PrepareRecoveryContext(state, "Recovery");
             state.Recovery = await _recoveryAgent.ExecuteAsync(state, cancellationToken);
             await _mcpAdapter.PublishStatusAsync($"Recovery attempt {state.RecoveryAttemptCount} completed.");
 
             var recoveredResult = await GeneratedFileApplier.ApplyAsync(state);
+            RecordNuGetPackageChanges(state);
             if (recoveredResult.AppliedFiles.Count > 0)
             {
                 state.AddTimeline($"Recovery files applied: {string.Join(", ", recoveredResult.AppliedFiles)}");

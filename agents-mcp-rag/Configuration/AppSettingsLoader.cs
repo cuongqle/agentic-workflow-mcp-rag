@@ -20,6 +20,8 @@ public static class AppSettingsLoader
         string repoPath = GetRequiredString(root, "Repo", "Path");
         int maxRecoveryAttempts = 2;
         int maxCompilationFixAttempts = 3;
+        int compilationFixMaxContextChars = 200_000;
+        int compilationFixMaxOptionalFiles = 0;
         bool useHybridRag = true;
         double ragLexicalWeight = 0.55;
         double ragVectorWeight = 0.45;
@@ -39,6 +41,18 @@ public static class AppSettingsLoader
                 && maxCompilationFixNode.TryGetInt32(out int parsedMaxCompilationFix))
             {
                 maxCompilationFixAttempts = parsedMaxCompilationFix;
+            }
+
+            if (workflowNode.TryGetProperty("CompilationFixMaxContextChars", out var maxContextCharsNode)
+                && maxContextCharsNode.TryGetInt32(out int parsedMaxContextChars))
+            {
+                compilationFixMaxContextChars = parsedMaxContextChars;
+            }
+
+            if (workflowNode.TryGetProperty("CompilationFixMaxOptionalFiles", out var maxOptionalFilesNode)
+                && maxOptionalFilesNode.TryGetInt32(out int parsedMaxOptionalFiles))
+            {
+                compilationFixMaxOptionalFiles = parsedMaxOptionalFiles;
             }
 
             if (workflowNode.TryGetProperty("UseHybridRag", out var useHybridNode)
@@ -97,7 +111,12 @@ public static class AppSettingsLoader
             RagVectorWeight = ragVectorWeight,
             DefaultTaskPrompt = defaultTaskPrompt,
             AutoCreatePullRequest = autoCreatePullRequest,
-            PullRequestBaseBranch = pullRequestBaseBranch
+            PullRequestBaseBranch = pullRequestBaseBranch,
+            CompilationFixContext = new CompilationFixContextOptions
+            {
+                MaxTotalChars = compilationFixMaxContextChars,
+                MaxOptionalFiles = compilationFixMaxOptionalFiles
+            }
         };
     }
 

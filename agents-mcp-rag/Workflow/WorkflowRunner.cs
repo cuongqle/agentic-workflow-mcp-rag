@@ -36,11 +36,13 @@ internal sealed class WorkflowRunner
 
         Console.WriteLine("\n=== Step 4: Running Multi-Agent Development Workflow ===");
         string taskPrompt = args.Length > 0 ? string.Join(' ', args) : settings.DefaultTaskPrompt;
-        RagContextBundle ragContext = await RagContextComposer.BuildAsync(repoPath, taskPrompt, ragIndex);
+        RepoContract contract = RepoContractDiscoverer.Discover(repoPath);
+        RagContextBundle ragContext = await RagContextComposer.BuildAsync(repoPath, taskPrompt, ragIndex, contract);
 
         var workflowState = new WorkflowState
         {
             RepoPath = repoPath,
+            Contract = contract,
             ProjectStructureContext = ragContext.StructureContext,
             LegacyImplementationContext = ragContext.LegacyImplementationContext,
             CombinedRagContext = ragContext.CombinedContext,
@@ -61,7 +63,8 @@ internal sealed class WorkflowRunner
             new RecoveryAgent(kernel),
             new GitHubMcpAdapter(mcpClient, settings.AutoCreatePullRequest, settings.PullRequestBaseBranch),
             settings.MaxRecoveryAttempts,
-            settings.MaxCompilationFixAttempts);
+            settings.MaxCompilationFixAttempts,
+            settings.CompilationFixContext);
 
         return await orchestrator.RunAsync(workflowState, cancellationToken);
     }

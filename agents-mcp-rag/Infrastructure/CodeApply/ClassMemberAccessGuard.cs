@@ -11,6 +11,10 @@ internal static class ClassMemberAccessGuard
         @"public\s+class\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([^{]+))?",
         RegexOptions.Compiled);
 
+    private static readonly Regex InterfaceDeclarationRegex = new(
+        @"public\s+interface\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([^{]+))?",
+        RegexOptions.Compiled);
+
     private static readonly Regex InstanceMemberDeclarationRegex = new(
         @"(?:public|protected|private|internal)\s+(?:static\s+|readonly\s+|virtual\s+|override\s+)*([\w<>\[\],\s\?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\{|=>|;)",
         RegexOptions.Compiled | RegexOptions.Multiline);
@@ -19,20 +23,55 @@ internal static class ClassMemberAccessGuard
         @"\b(this|@this)\.([A-Za-z_][A-Za-z0-9_]*)\s*\.",
         RegexOptions.Compiled);
 
-    internal static string? BuildBaseTypeContext(string repoPath, string classContent, string? classFileName = null)
+    internal static string? BuildBaseTypeContext(string repoPath, string typeContent, string? classFileName = null) =>
+        BuildTypeContractContext(repoPath, typeContent);
+
+    internal static string? BuildTypeContractContext(string repoPath, string typeNameOrContent)
     {
-        if (!TryParseClassDeclaration(classContent, out string className, out IReadOnlyList<string> baseTypes))
+        if (TryParseTypeDeclaration(typeNameOrContent, out string typeName, out IReadOnlyList<string> baseTypes))
+        {
+            var declaredMembers = CollectAccessibleMembers(repoPath, typeName, typeNameOrContent, baseTypes);
+            return FormatAccessibleMembers(typeName, declaredMembers);
+        }
+
+        if (!TryCollectAccessibleMembersForType(repoPath, typeNameOrContent, out string resolvedName, out HashSet<string> resolvedMembers))
         {
             return null;
         }
 
-        var members = CollectAccessibleMembers(repoPath, className, classContent, baseTypes);
-        if (members.Count == 0)
-        {
-            return null;
-        }
+        return FormatAccessibleMembers(resolvedName, resolvedMembers);
+    }
 
-        return $"Accessible instance members for {className} (from type and bases): {string.Join(", ", members.OrderBy(m => m, StringComparer.Ordinal))}";
+    internal static IEnumerable<string> CollectInheritedTypeNames(string repoPath, string typeName)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        queue.Enqueue(typeName);
+        while (queue.Count > 0)
+        {
+            string current = queue.Dequeue();
+            if (!visited.Add(current))
+            {
+                continue;
+            }
+
+            yield return current;
+            string? content = ResolveTypeContent(repoPath, current);
+            if (string.IsNullOrWhiteSpace(content)
+                || !TryParseTypeDeclaration(content, out _, out IReadOnlyList<string> baseTypes))
+            {
+                continue;
+            }
+
+            foreach (string baseType in baseTypes)
+            {
+                string normalized = NormalizeTypeName(baseType);
+                if (!string.IsNullOrWhiteSpace(normalized))
+                {
+                    queue.Enqueue(normalized);
+                }
+            }
+        }
     }
 
     internal static bool ShouldValidateFile(string relativePath)
@@ -130,14 +169,12 @@ internal static class ClassMemberAccessGuard
 
         AddMembersFromContent(baseContent, members, includePrivate: false);
 
-        if (!TryParseClassDeclaration(baseContent, out _, out IReadOnlyList<string> parentBases))
+        if (TryParseTypeDeclaration(baseContent, out _, out IReadOnlyList<string> parentBases))
         {
-            return;
-        }
-
-        foreach (string parent in parentBases)
-        {
-            CollectBaseMembers(repoPath, NormalizeTypeName(parent), visitedTypes, members);
+            foreach (string parent in parentBases)
+            {
+                CollectBaseMembers(repoPath, NormalizeTypeName(parent), visitedTypes, members);
+            }
         }
     }
 
@@ -208,7 +245,7 @@ internal static class ClassMemberAccessGuard
             }
 
             string fileContent = File.ReadAllText(path);
-            if (Regex.IsMatch(fileContent, $@"\bclass\s+{Regex.Escape(typeName)}\b"))
+            if (Regex.IsMatch(fileContent, $@"\b(class|interface)\s+{Regex.Escape(typeName)}\b"))
             {
                 return fileContent;
             }
@@ -217,20 +254,54 @@ internal static class ClassMemberAccessGuard
         return null;
     }
 
-    private static bool TryParseClassDeclaration(
-        string content,
-        out string className,
-        out IReadOnlyList<string> baseTypes)
+    internal static bool TryCollectAccessibleMembersForType(
+        string repoPath,
+        string typeName,
+        out string resolvedTypeName,
+        out HashSet<string> members)
     {
-        className = string.Empty;
-        baseTypes = Array.Empty<string>();
-        Match match = ClassDeclarationRegex.Match(content);
-        if (!match.Success)
+        members = new HashSet<string>(StringComparer.Ordinal);
+        resolvedTypeName = typeName;
+        string? content = ResolveTypeContent(repoPath, typeName);
+        if (string.IsNullOrWhiteSpace(content)
+            || !TryParseTypeDeclaration(content, out resolvedTypeName, out IReadOnlyList<string> baseTypes))
         {
             return false;
         }
 
-        className = match.Groups[1].Value;
+        members = CollectAccessibleMembers(repoPath, resolvedTypeName, content, baseTypes);
+        return members.Count > 0;
+    }
+
+    private static string? FormatAccessibleMembers(string typeName, HashSet<string> members) =>
+        members.Count == 0
+            ? null
+            : $"Accessible members on {typeName} (declared + inherited): {string.Join(", ", members.OrderBy(m => m, StringComparer.Ordinal))}";
+
+    private static bool TryParseClassDeclaration(
+        string content,
+        out string className,
+        out IReadOnlyList<string> baseTypes) =>
+        TryParseTypeDeclaration(content, out className, out baseTypes);
+
+    private static bool TryParseTypeDeclaration(
+        string content,
+        out string typeName,
+        out IReadOnlyList<string> baseTypes)
+    {
+        typeName = string.Empty;
+        baseTypes = Array.Empty<string>();
+        Match match = InterfaceDeclarationRegex.Match(content);
+        if (!match.Success)
+        {
+            match = ClassDeclarationRegex.Match(content);
+            if (!match.Success)
+            {
+                return false;
+            }
+        }
+
+        typeName = match.Groups[1].Value;
         if (!match.Groups[2].Success || string.IsNullOrWhiteSpace(match.Groups[2].Value))
         {
             return true;
@@ -240,7 +311,6 @@ internal static class ClassMemberAccessGuard
             .Split(',', StringSplitOptions.RemoveEmptyEntries)
             .Select(NormalizeTypeName)
             .Where(type => !string.IsNullOrWhiteSpace(type))
-            .Where(type => !type.StartsWith("I", StringComparison.Ordinal))
             .ToList();
 
         return true;

@@ -1,5 +1,3 @@
-using agents_mcp_rag.Infrastructure;
-
 sealed partial class WorkflowOrchestrator
 {
     private async Task RunCompilationFixLoopAsync(
@@ -9,17 +7,15 @@ sealed partial class WorkflowOrchestrator
     {
         int attempt = 0;
         while (state.BuildValidation is not null
-               && state.BuildValidation.Findings.Count > 0
-               && attempt < _maxCompilationFixAttempts)
+               && attempt < _maxCompilationFixAttempts
+               && HasUnresolvedCompilationProblems(state))
         {
             attempt++;
             state.Stage = WorkflowStage.Integrating;
-            state.CompilationFixAllowedFiles = CompilationFixFileResolver.DetermineAllowedFiles(state);
-            state.CompilationContractContext = CompilationContractContextBuilder.Build(
-                state.RepoPath,
-                state.CompilationFixAllowedFiles,
-                state.BuildValidation?.Findings);
-            state.AddTimeline($"Compilation fix attempt {attempt} started.");
+
+            PrepareRecoveryContext(state, "Compilation fix");
+
+            state.AddTimeline($"Compilation fix attempt {attempt} started (LLM recovery).");
             await _mcpAdapter.PublishStatusAsync($"Compilation fix attempt {attempt} started.");
 
             state.Recovery = await _recoveryAgent.ExecuteAsync(state, cancellationToken);
@@ -36,19 +32,15 @@ sealed partial class WorkflowOrchestrator
                 state.AddTimeline("Compilation fix produced no applicable file changes.");
             }
 
+            state.ComplianceIssues.RemoveAll(issue =>
+                issue.Contains("Compilation fix rejected", StringComparison.OrdinalIgnoreCase));
             foreach (var rejected in applyResult.RejectedFiles)
             {
                 state.AddTimeline($"Compilation fix rejected '{rejected.RelativePath}': {rejected.Reason}");
                 state.ComplianceIssues.Add($"Compilation fix rejected '{rejected.RelativePath}': {rejected.Reason}");
             }
 
-            foreach (string packageChange in ProjectPackageAuditor.EnsureMissingPackages(
-                         state.RepoPath,
-                         state.BuildValidation?.Findings,
-                         WorkflowFindingRules.GetAllProposedFiles(state)))
-            {
-                state.AddTimeline($"NuGet restore: {packageChange}");
-            }
+            RecordNuGetPackageChanges(state);
 
             state.BuildValidation = await _buildValidationAgent.ExecuteAsync(state, cancellationToken);
             if (state.BuildValidation.Findings.Count == 0)
@@ -71,4 +63,17 @@ sealed partial class WorkflowOrchestrator
             ApplyTestFailureReleasePolicy(state);
         }
     }
+
+    private static bool HasUnresolvedCompilationProblems(WorkflowState state)
+    {
+        bool hasBuildErrors = state.BuildValidation?.Findings.Any(f =>
+            !f.Message.Contains("Build FAILED", StringComparison.OrdinalIgnoreCase)
+            && !f.Message.Contains("Build failed", StringComparison.OrdinalIgnoreCase)) == true;
+
+        bool hasApplyRejections = state.ComplianceIssues.Any(issue =>
+            issue.Contains("Compilation fix rejected", StringComparison.OrdinalIgnoreCase));
+
+        return hasBuildErrors || hasApplyRejections;
+    }
+
 }

@@ -14,8 +14,12 @@ internal static class TypeMemberConsistencyGuard
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     private static readonly Regex MemberAccessRegex = new(
-        @"\b[a-z][A-Za-z0-9_]*\.([A-Za-z_][A-Za-z0-9_]*)\b",
+        @"\b(?<recv>[a-z][A-Za-z0-9_]*)\.(?<member>[A-Za-z_][A-Za-z0-9_]*)\b",
         RegexOptions.Compiled);
+
+    private static readonly Regex SelectProjectionStartRegex = new(
+        @"select\s+new\s*\{",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly HashSet<string> IgnoredMemberNames = new(StringComparer.Ordinal)
     {
@@ -361,9 +365,19 @@ internal static class TypeMemberConsistencyGuard
     private static HashSet<string> ExtractProjectedMemberReferences(string consumerContent)
     {
         var members = new HashSet<string>(StringComparer.Ordinal);
+        if (TryExtractMembersFromSelectProjections(consumerContent, members))
+        {
+            return members;
+        }
+
         foreach (Match match in MemberAccessRegex.Matches(consumerContent))
         {
-            string member = match.Groups[1].Value;
+            if (IsFrameworkReceiver(match.Groups["recv"].Value))
+            {
+                continue;
+            }
+
+            string member = match.Groups["member"].Value;
             if (IgnoredMemberNames.Contains(member))
             {
                 continue;
@@ -374,6 +388,71 @@ internal static class TypeMemberConsistencyGuard
 
         return members;
     }
+
+    /// <summary>Index/DTO projections: only validate entity members inside "select new { ... }".</summary>
+    private static bool TryExtractMembersFromSelectProjections(string content, HashSet<string> members)
+    {
+        bool foundProjection = false;
+        foreach (Match selectMatch in SelectProjectionStartRegex.Matches(content))
+        {
+            int braceIndex = selectMatch.Index + selectMatch.Length - 1;
+            if (braceIndex < 0 || braceIndex >= content.Length || content[braceIndex] != '{')
+            {
+                continue;
+            }
+
+            if (!TryReadBracedBlock(content, braceIndex, out string block))
+            {
+                continue;
+            }
+
+            foundProjection = true;
+            foreach (Match match in MemberAccessRegex.Matches(block))
+            {
+                if (IsFrameworkReceiver(match.Groups["recv"].Value))
+                {
+                    continue;
+                }
+
+                string member = match.Groups["member"].Value;
+                if (!IgnoredMemberNames.Contains(member))
+                {
+                    members.Add(member);
+                }
+            }
+        }
+
+        return foundProjection;
+    }
+
+    private static bool TryReadBracedBlock(string content, int openBraceIndex, out string block)
+    {
+        block = string.Empty;
+        int depth = 0;
+        for (int i = openBraceIndex; i < content.Length; i++)
+        {
+            char c = content[i];
+            if (c == '{')
+            {
+                depth++;
+            }
+            else if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    block = content[openBraceIndex..(i + 1)];
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsFrameworkReceiver(string receiver) =>
+        receiver.Equals("this", StringComparison.Ordinal)
+        || receiver.Equals("base", StringComparison.Ordinal);
 
     private static DefinitionConsumerPair? FindBestExemplarPair(string repoPath, string? taskSubjectHint)
     {

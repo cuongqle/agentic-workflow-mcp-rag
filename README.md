@@ -46,6 +46,8 @@ Edit `agents-mcp-rag/appsettings.json`:
   "Workflow": {
     "MaxRecoveryAttempts": 3,
     "MaxCompilationFixAttempts": 3,
+    "CompilationFixMaxContextChars": 200000,
+    "CompilationFixMaxOptionalFiles": 0,
     "UseHybridRag": true,
     "RagLexicalWeight": 0.55,
     "RagVectorWeight": 0.45,
@@ -112,8 +114,8 @@ flowchart TB
         O -->|no| P[ObserverAgent]
         P --> Q[AuditorAgent]
         Q --> R{Blocking audit?}
-        R -->|yes| S[RecoveryAgent loop]
-        S --> T[Re-apply + re-build + re-audit]
+        R -->|yes| S[Recovery loop]
+        S --> T[Apply + NuGet + re-build + re-audit]
         T --> R
         R -->|no| U[Test quarantine policy]
         U --> V{Still blocked?}
@@ -124,6 +126,8 @@ flowchart TB
         Z --> AA[Done]
     end
 ```
+
+**Compilation fix loop** and **recovery loop** both run: `PrepareRecoveryContext` → `RecoveryAgent` → `GeneratedFileApplier` → `RecordNuGetPackageChanges` → `BuildValidationAgent` (repeat until pass or max attempts).
 
 ### Stage-by-stage
 
@@ -138,12 +142,12 @@ flowchart TB
 | **7** | `ArchitectureAgent` | Plan: rationale, backend/frontend tasks, test strategy. |
 | **8** | `BackendDeveloperAgent` / `FrontendDeveloperAgent` | Parallel JSON file generation (paths + full content). |
 | **9** | `GeneratedFileApplier` | Canonical paths, duplicate prevention, C# guards, writes files. |
-| **10** | Compliance (deterministic) | Repository contracts, path conventions, missing unit tests. |
-| **11** | Compilation fix loop | `RecoveryAgent` + re-apply (up to `MaxCompilationFixAttempts`). |
+| **10** | Compliance (deterministic) | `RepoContract` + path conventions, entity/layer guards, missing unit tests. |
+| **11** | Compilation fix loop | `PrepareRecoveryContext` → `RecoveryAgent` → apply → NuGet restore → rebuild (up to `MaxCompilationFixAttempts`). |
 | **12** | `BuildValidationAgent` | Full solution build + per-project production build. |
 | **13** | `ObserverAgent` | Integration / cross-cutting review. |
 | **14** | `AuditorAgent` | LLM audit + merged compliance/build findings. |
-| **15** | Recovery loop | Up to `MaxRecoveryAttempts` if blocking audit findings remain. |
+| **15** | Recovery loop | Same context prep as compilation fix; up to `MaxRecoveryAttempts`. |
 | **16** | Test release policy | Quarantine failing test artifacts; keep production changes. |
 | **17** | Final gate | Rollback only on **production** build failure; else PR path. |
 | **18** | `WorkflowArtifactWriter` | Persists timeline and summaries. |
@@ -170,9 +174,67 @@ Queued → Planning → Implementing → Integrating → Auditing
 | **BuildValidationAgent** | `dotnet build` on solution + non-test projects (`ProductionBuildPassed`). |
 | **ObserverAgent** | Post-build integration observation. |
 | **AuditorAgent** | Release-readiness review; merges with deterministic findings. |
-| **RecoveryAgent** | Targeted fixes from audit/build/compliance issues (JSON file patches). |
+| **RecoveryAgent** | Fixes build/apply failures using full exemplar sources + contract (not RAG snippets). |
 
-All LLM agents share `LlmWorkflowAgentBase` and consume `WorkflowState.CombinedRagContext`.
+Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** uses `CompilationFixExemplarContext` and `CompilationFixAllowedFiles` prepared by the orchestrator.
+
+---
+
+## Repository contract (discovered once per run)
+
+`RepoContractDiscoverer` scans the target repo at startup and stores layout on `WorkflowState.Contract`:
+
+- Layer conventions (repository, service, controller, …) with exemplar paths
+- Entity conventions (`IEntity`, canonical directory)
+- Frontend layout mode (e.g. host-module pages vs sibling feature modules)
+
+Agents and compliance checks use this contract instead of hardcoded project-specific playbooks.
+
+---
+
+## LLM-first compilation recovery
+
+When `dotnet build` fails (or blocking compliance is found), the orchestrator runs a **compilation fix loop** and the **auditor recovery loop** with the same context preparation.
+
+### `PrepareRecoveryContext` (orchestrator)
+
+Called before every `RecoveryAgent` invocation (`WorkflowOrchestrator.Recovery.cs`):
+
+1. **Workspace cleanup** — remove orphan `obj/` trees and stray `.csproj` files not in the solution (`CompilationFixFileResolver.PrepareRecoveryPass`).
+2. **Allowed files** — paths derived from build messages, type symbols, contract dependencies, and error-directory siblings (`DetermineAllowedFiles`, up to 80 paths).
+3. **Exemplar sources** — full file contents inlined into `CompilationFixExemplarContext` (`CompilationFixContextBuilder`).
+
+### What goes into the recovery prompt
+
+| Prompt section | Source |
+|----------------|--------|
+| Exemplar sources (full files) | `CompilationFixExemplarContext` |
+| Allowed files (path list) | `CompilationFixAllowedFiles` |
+| Build errors | `BuildValidation.Findings` |
+| Apply rejections + hints | `ComplianceIssues` |
+| Repo layout | `Contract.FormatStructureSummary()` |
+| Task | `Task.Description` |
+
+`RecoveryAgent` does **not** use `CombinedRagContext` for fixes.
+
+### Mandatory vs optional inlined files
+
+`CompilationFixContextBuilder` uses two tiers:
+
+| Tier | Included | Limits |
+|------|----------|--------|
+| **Mandatory** | Every `.cs` / `.csproj` path in build output; all `.cs` siblings in those directories; layer/entity exemplars from contract | Always inlined (no cap) |
+| **Optional** | Other allowed paths (ranked by relevance) | `CompilationFixMaxContextChars` (default `200000`; `0` = unlimited) and `CompilationFixMaxOptionalFiles` (`0` = unlimited) |
+
+Timeline logs `inlined N full source file(s)` and, if truncated, `M lower-priority path(s) not inlined`.
+
+### Apply after recovery
+
+1. `GeneratedFileApplier` writes `Recovery.ProposedFiles` (C# guards, interface implementation check, layer/entity validation).
+2. `RecordNuGetPackageChanges` runs `dotnet add package` when test code needs new packages (`ProjectPackageAuditor`).
+3. `BuildValidationAgent` runs again.
+
+Build-message parsing (paths, quoted type names) is centralized in `BuildFailureClassifier` — not per error-code handlers.
 
 ---
 
@@ -183,9 +245,11 @@ All LLM agents share `LlmWorkflowAgentBase` and consume `WorkflowState.CombinedR
 - **Hybrid retrieval** (`UseHybridRag: true`):
   - **Lexical** — term overlap (weight `RagLexicalWeight`, default `0.55`).
   - **Vector** — OpenAI embeddings (weight `RagVectorWeight`, default `0.45`).
-- **Composer:** `RagContextComposer` merges structure, conventions, exemplar snippets, and task-specific retrieval into `CombinedRagContext` passed to every agent.
+- **Composer:** `RagContextComposer` merges structure, conventions, exemplar snippets, and task-specific retrieval into `CombinedRagContext` for **planning and implementation** agents.
 
 Embeddings are held **in memory** for the run (not persisted to a vector DB).
+
+Recovery uses **on-disk full files** for error-adjacent paths (see [LLM-first compilation recovery](#llm-first-compilation-recovery)), not RAG chunks.
 
 ---
 
@@ -198,7 +262,8 @@ These run without the LLM and produce `AgentFinding` entries (High/Blocker can t
 | Layer contracts | `ContractComplianceValidator` | I*{Role} + implementation pairs for discovered layers (repository, service, controller). |
 | Path conventions | `ValidatePathConventions` | Controllers, indexes, duplicate index files. |
 | Missing tests | `TestCoverageAuditor` | `*Tests.cs` per discovered layer (repository, service, controller, …). |
-| File quality | `GeneratedFileApplier` | Non-prose, C# shape, layer profiles, interface parity. |
+| File quality | `GeneratedFileApplier` | Non-prose, C# shape, layer profiles, interface parity (including generic interfaces, e.g. `IExpression<T>`). |
+| Package restore | `ProjectPackageAuditor` | Adds missing test NuGet packages after apply; skips invalid/non-XML `.csproj` files. |
 | Bootstrap DI | `CompositionRootMerger` | Appends `services.Add*` lines only; never rewrites bootstrap `.cs` files. |
 | Test syntax | `CodeExemplarContext.TryValidate` | Balanced braces; rejects `;;` and similar. |
 | Test template | `LayerTestTemplateBuilder` | Clones sibling layer `*Tests.cs` exemplar if LLM output is invalid. |
@@ -228,17 +293,24 @@ agents-mcp-rag/
     │   └── ApplicationHost.cs     # Wires settings → kernel → MCP → runner
     ├── Configuration/
     │   ├── AppSettings.cs
-    │   └── AppSettingsLoader.cs
+    │   ├── AppSettingsLoader.cs
+    │   └── CompilationFixContextOptions.cs
     ├── Workflow/
     │   ├── WorkflowRunner.cs      # RAG + orchestrator
     │   └── WorkflowResultPrinter.cs
     ├── Orchestration/
-    │   └── WorkflowOrchestrator.cs
+    │   ├── WorkflowOrchestrator.cs
+    │   ├── WorkflowOrchestrator.CompilationFix.cs
+    │   ├── WorkflowOrchestrator.Recovery.cs
+    │   ├── CompilationFixContextBuilder.cs
+    │   ├── CompilationFixFileResolver.cs
+    │   └── ContractComplianceValidator.cs
     ├── Agents/                    # Architecture, Backend, Frontend, Audit, Recovery, Build
     ├── Infrastructure/
     │   ├── Rag/                   # Index, context composer, repo scanner
     │   ├── CodeApply/             # File applier, exemplars, contract guards
-    │   ├── Compliance/            # Layer conventions, tests, DI wiring, build classifier
+    │   ├── Compliance/            # Layer conventions, tests, DI wiring, build classifier, packages
+    │   ├── RepoContract/          # Discovered layout and conventions per target repo
     │   ├── Git/                   # Git commands, GitHub MCP, repo resolver
     │   ├── Kernel/                # Semantic Kernel factory
     │   └── Artifacts/             # Workflow output writer
@@ -259,6 +331,8 @@ agents-mcp-rag/
 | `Repo:Path` | Local path or Git remote URL of target repo. |
 | `Workflow:MaxRecoveryAttempts` | Auditor/recovery loop limit. |
 | `Workflow:MaxCompilationFixAttempts` | Recovery-driven compile fix limit. |
+| `Workflow:CompilationFixMaxContextChars` | Max characters for optional inlined files in recovery prompt (`0` = unlimited). Mandatory error files are always inlined. |
+| `Workflow:CompilationFixMaxOptionalFiles` | Max optional file count after mandatory set (`0` = unlimited). |
 | `Workflow:UseHybridRag` | Enable lexical + vector retrieval. |
 | `Workflow:RagLexicalWeight` / `RagVectorWeight` | Hybrid score weights (should sum ~1). |
 | `Workflow:DefaultTaskPrompt` | Task used when no CLI args. |
@@ -278,7 +352,10 @@ Example timeline lines:
 ```
 2026-05-18T09:49:18Z | Architecture planning started.
 2026-05-18T09:49:18Z | Generated files applied: SinglePageSample.Repository/...
-2026-05-18T09:49:18Z | Build validation passed.
+2026-05-18T09:49:18Z | Compilation fix: inlined 8 full source file(s): ...
+2026-05-18T09:49:18Z | Compilation fix applied files: ...
+2026-05-18T09:49:18Z | NuGet restore: added package xunit to ...
+2026-05-18T09:49:18Z | Build passed after compilation fix attempt 1.
 2026-05-18T09:49:18Z | Workflow ready for PR.
 ```
 

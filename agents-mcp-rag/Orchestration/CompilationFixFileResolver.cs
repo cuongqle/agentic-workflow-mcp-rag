@@ -1,15 +1,39 @@
 using System.Text.RegularExpressions;
+using agents_mcp_rag.Infrastructure;
 
 static class CompilationFixFileResolver
 {
+    public static IReadOnlyList<string> PrepareRecoveryPass(WorkflowState state)
+    {
+        var timeline = new List<string>();
+        foreach (string change in CleanupWorkspace(state.RepoPath))
+        {
+            timeline.Add($"Workspace cleanup: {change}");
+        }
+
+        return timeline;
+    }
+
     public static List<string> DetermineAllowedFiles(WorkflowState state)
     {
         var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var finding in state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>())
         {
-            foreach (var file in ExtractFilePathsFromBuildMessage(finding.Message, state.RepoPath))
+            foreach (var file in CollectErrorSourcePaths(finding.Message, state.RepoPath))
             {
-                files.Add(file);
+                if (!IsArtifactPath(file))
+                {
+                    files.Add(file);
+                }
+            }
+
+            foreach (Match match in Regex.Matches(finding.Message, @"\[([^\]]+\.csproj)\]", RegexOptions.IgnoreCase))
+            {
+                string project = NormalizeToRepoRelativePath(match.Groups[1].Value, state.RepoPath);
+                if (!string.IsNullOrWhiteSpace(project))
+                {
+                    files.Add(project);
+                }
             }
         }
         foreach (var issue in state.ComplianceIssues)
@@ -22,6 +46,7 @@ static class CompilationFixFileResolver
 
         var declarationIndex = BuildTypeDeclarationIndex(state.RepoPath);
         ExpandWithBuildSymbolHints(state, files, declarationIndex);
+        ExpandInheritedTypesFromFindings(state.RepoPath, state.BuildValidation?.Findings, files, declarationIndex);
 
         if (files.Count == 0)
         {
@@ -39,9 +64,118 @@ static class CompilationFixFileResolver
             }
         }
 
+        ExpandEntityPathsFromBuildMessages(state, files);
+        ExpandErrorDirectorySiblings(state.RepoPath, files);
         ExpandWithContractDependencies(state.RepoPath, files, declarationIndex);
         return files.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).Take(80).ToList();
     }
+
+    private static void ExpandEntityPathsFromBuildMessages(WorkflowState state, HashSet<string> files)
+    {
+        EntityConvention? entity = state.Contract?.Entity;
+        if (entity is null || string.IsNullOrWhiteSpace(entity.RequiredInterface))
+        {
+            return;
+        }
+
+        foreach (var finding in state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>())
+        {
+            if (!finding.Message.Contains(entity.RequiredInterface, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entity.ExemplarRelativePath))
+            {
+                files.Add(entity.ExemplarRelativePath);
+            }
+
+            foreach (string typeName in BuildFailureClassifier.ExtractTypeSymbolsFromMessage(finding.Message))
+            {
+                string shortName = typeName.Contains('.')
+                    ? typeName[(typeName.LastIndexOf('.') + 1)..]
+                    : typeName;
+                files.Add($"{entity.CanonicalDirectory}/{shortName}.cs");
+            }
+        }
+    }
+
+    private static IEnumerable<string> CollectErrorSourcePaths(WorkflowState state) =>
+        (state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>())
+        .SelectMany(f => CollectErrorSourcePaths(f.Message, state.RepoPath))
+        .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> CollectErrorSourcePaths(string message, string repoPath) =>
+        ExtractFilePathsFromBuildMessage(message, repoPath)
+            .Where(path => !IsArtifactPath(path) && !path.EndsWith(".AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase));
+
+    private static void ExpandErrorDirectorySiblings(string repoPath, HashSet<string> files)
+    {
+        foreach (string relativePath in files.ToList())
+        {
+            string? directory = Path.GetDirectoryName(relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                continue;
+            }
+
+            string absoluteDir = Path.Combine(repoPath, directory);
+            if (!Directory.Exists(absoluteDir))
+            {
+                continue;
+            }
+
+            foreach (string sibling in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.TopDirectoryOnly).Take(12))
+            {
+                files.Add(Path.GetRelativePath(repoPath, sibling).Replace('\\', '/'));
+            }
+        }
+    }
+
+    private static IEnumerable<string> CleanupWorkspace(string repoPath)
+    {
+        foreach (string artifactRoot in Directory.EnumerateDirectories(repoPath, "obj", SearchOption.AllDirectories))
+        {
+            string? owner = Path.GetDirectoryName(artifactRoot);
+            if (string.IsNullOrWhiteSpace(owner)
+                || Directory.EnumerateFiles(owner, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+            {
+                continue;
+            }
+
+            Directory.Delete(artifactRoot, recursive: true);
+            yield return $"removed orphan obj: {Path.GetRelativePath(repoPath, artifactRoot).Replace('\\', '/')}";
+        }
+
+        IReadOnlyList<string> solutionProjects = SolutionProjectCatalog.GetSolutionProjectRelativePaths(repoPath);
+        if (solutionProjects.Count == 0)
+        {
+            yield break;
+        }
+
+        var solutionSet = new HashSet<string>(solutionProjects, StringComparer.OrdinalIgnoreCase);
+        foreach (string projectPath in Directory.EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories))
+        {
+            if (projectPath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || projectPath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string relative = Path.GetRelativePath(repoPath, projectPath).Replace('\\', '/');
+            if (solutionSet.Contains(relative))
+            {
+                continue;
+            }
+
+            File.Delete(projectPath);
+            yield return $"removed stray csproj: {relative}";
+        }
+    }
+
+    private static bool IsArtifactPath(string relativePath) =>
+        relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+        || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> ExtractFilePathsFromBuildMessage(string message, string repoPath)
     {
@@ -216,43 +350,42 @@ static class CompilationFixFileResolver
         HashSet<string> files,
         Dictionary<string, List<string>> declarationIndex)
     {
+        var typeNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var finding in state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>())
         {
-            foreach (var symbol in ExtractMissingSymbolsFromBuildMessage(finding.Message))
+            foreach (string symbol in BuildFailureClassifier.ExtractTypeSymbolsFromMessage(finding.Message))
             {
-                if (!declarationIndex.TryGetValue(symbol, out var candidates))
-                {
-                    continue;
-                }
+                typeNames.Add(symbol);
+            }
+        }
 
-                foreach (var candidate in candidates)
+        BuildFailureClassifier.ExpandDeclarationPathsForTypes(state.RepoPath, typeNames, files, declarationIndex);
+    }
+
+    private static void ExpandInheritedTypesFromFindings(
+        string repoPath,
+        IReadOnlyList<AgentFinding>? buildFindings,
+        HashSet<string> files,
+        Dictionary<string, List<string>> declarationIndex)
+    {
+        foreach (var finding in buildFindings ?? Array.Empty<AgentFinding>())
+        {
+            foreach (string symbol in BuildFailureClassifier.ExtractTypeSymbolsFromMessage(finding.Message))
+            {
+                foreach (string inheritedType in ClassMemberAccessGuard.CollectInheritedTypeNames(repoPath, symbol))
                 {
-                    files.Add(candidate);
+                    if (!declarationIndex.TryGetValue(inheritedType, out var declaringFiles))
+                    {
+                        continue;
+                    }
+
+                    foreach (string declaring in declaringFiles)
+                    {
+                        files.Add(declaring);
+                    }
                 }
             }
         }
     }
 
-    private static IEnumerable<string> ExtractMissingSymbolsFromBuildMessage(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return Enumerable.Empty<string>();
-        }
-
-        var symbols = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(message, @"name '([A-Za-z_][A-Za-z0-9_]*)' could not be found", RegexOptions.IgnoreCase))
-        {
-            symbols.Add(match.Groups[1].Value);
-        }
-        foreach (Match match in Regex.Matches(
-                     message,
-                     @"'([A-Za-z_][A-Za-z0-9_]*)'\s+does not contain a definition for\s+'([A-Za-z_][A-Za-z0-9_]*)'",
-                     RegexOptions.IgnoreCase))
-        {
-            symbols.Add(match.Groups[1].Value);
-        }
-
-        return symbols;
-    }
 }
