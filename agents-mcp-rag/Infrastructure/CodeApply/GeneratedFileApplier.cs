@@ -736,11 +736,24 @@ static class GeneratedFileApplier
             return false;
         }
 
-        foreach (var paramType in LayerConventionProfiles.ResolveRequiredConstructorParamTypes(repoPath, entity, profile))
+        string? ctorExemplarPath = LayerConventionProfiles.TryGetConstructorExemplarRelativePath(
+            repoPath,
+            entity,
+            profile,
+            relativePath);
+        foreach (var paramType in LayerConventionProfiles.ResolveRequiredConstructorParamTypes(
+                     repoPath,
+                     entity,
+                     profile,
+                     relativePath))
         {
             if (!content.Contains(paramType, StringComparison.Ordinal))
             {
-                reason = $"Dynamic {role} contract failed for {fileName}: missing constructor dependency type '{paramType}'.";
+                string exemplarHint = string.IsNullOrWhiteSpace(ctorExemplarPath)
+                    ? string.Empty
+                    : $" Mirror constructor dependencies from {ctorExemplarPath}.";
+                reason =
+                    $"Dynamic {role} contract failed for {fileName}: missing constructor dependency type '{paramType}'.{exemplarHint}";
                 return false;
             }
         }

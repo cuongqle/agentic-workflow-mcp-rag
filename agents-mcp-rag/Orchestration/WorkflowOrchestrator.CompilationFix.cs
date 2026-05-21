@@ -32,12 +32,14 @@ sealed partial class WorkflowOrchestrator
                 state.AddTimeline("Compilation fix produced no applicable file changes.");
             }
 
-            state.ComplianceIssues.RemoveAll(issue =>
-                issue.Contains("Compilation fix rejected", StringComparison.OrdinalIgnoreCase));
+            state.ComplianceIssues.RemoveAll(WorkflowFindingRules.IsApplyRejectionComplianceIssue);
             foreach (var rejected in applyResult.RejectedFiles)
             {
-                state.AddTimeline($"Compilation fix rejected '{rejected.RelativePath}': {rejected.Reason}");
-                state.ComplianceIssues.Add($"Compilation fix rejected '{rejected.RelativePath}': {rejected.Reason}");
+                string issue = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
+                    rejected.RelativePath,
+                    rejected.Reason);
+                state.AddTimeline(issue);
+                state.ComplianceIssues.Add(issue);
             }
 
             RecordNuGetPackageChanges(state);
@@ -70,10 +72,7 @@ sealed partial class WorkflowOrchestrator
             !f.Message.Contains("Build FAILED", StringComparison.OrdinalIgnoreCase)
             && !f.Message.Contains("Build failed", StringComparison.OrdinalIgnoreCase)) == true;
 
-        bool hasApplyRejections = state.ComplianceIssues.Any(issue =>
-            issue.Contains("Compilation fix rejected", StringComparison.OrdinalIgnoreCase));
-
-        return hasBuildErrors || hasApplyRejections;
+        return hasBuildErrors || WorkflowFindingRules.HasUnresolvedApplyRejections(state);
     }
 
 }

@@ -66,19 +66,31 @@ sealed partial class WorkflowOrchestrator
         }
 
         await _mcpAdapter.PublishStatusAsync("Architecture plan completed.");
+        state.AddTimeline($"Repository layers (contract/RAG): {WorkflowFindingRules.FormatRepoCapabilities(state)}.");
 
         state.Stage = WorkflowStage.Implementing;
         state.AddTimeline("Implementation started.");
         var llmOutputQualityFindings = new List<AgentFinding>();
         var rollbackChanges = new Dictionary<string, AppliedFileChange>(StringComparer.OrdinalIgnoreCase);
 
-        var backendTask = _backendDeveloperAgent.ExecuteAsync(state, cancellationToken);
-        var frontendTask = _frontendDeveloperAgent.ExecuteAsync(state, cancellationToken);
-        await Task.WhenAll(backendTask, frontendTask);
-        state.Backend = backendTask.Result;
-        state.Frontend = frontendTask.Result;
+        (bool runBackend, bool runFrontend) = WorkflowFindingRules.ResolveImplementationScope(state);
+        state.AddTimeline($"Implementation scope: backend={runBackend}, frontend={runFrontend}.");
 
-        if (WorkflowFindingRules.IsAgentFallback(state.Backend))
+        Task<AgentResult> backendTask = runBackend
+            ? _backendDeveloperAgent.ExecuteAsync(state, cancellationToken)
+            : Task.FromResult(WorkflowFindingRules.SkippedAgentResult(
+                "BackendDeveloperAgent",
+                "Skipped: repository or architecture plan has no backend deliverables."));
+        Task<AgentResult> frontendTask = runFrontend
+            ? _frontendDeveloperAgent.ExecuteAsync(state, cancellationToken)
+            : Task.FromResult(WorkflowFindingRules.SkippedAgentResult(
+                "FrontendDeveloperAgent",
+                "Skipped: repository or architecture plan has no frontend deliverables."));
+        await Task.WhenAll(backendTask, frontendTask);
+        state.Backend = await backendTask;
+        state.Frontend = await frontendTask;
+
+        if (runBackend && WorkflowFindingRules.IsAgentFallback(state.Backend))
         {
             llmOutputQualityFindings.Add(new AgentFinding
             {
@@ -87,7 +99,7 @@ sealed partial class WorkflowOrchestrator
             });
         }
 
-        if (WorkflowFindingRules.IsAgentFallback(state.Frontend))
+        if (runFrontend && WorkflowFindingRules.IsAgentFallback(state.Frontend))
         {
             llmOutputQualityFindings.Add(new AgentFinding
             {
@@ -96,15 +108,41 @@ sealed partial class WorkflowOrchestrator
             });
         }
 
-        await _mcpAdapter.PublishStatusAsync("Backend and frontend implementation plans completed.");
+        if (!runBackend && !runFrontend)
+        {
+            await _mcpAdapter.PublishStatusAsync("Implementation skipped: architecture plan has no BACKEND_FILES or FRONTEND_FILES.");
+        }
+        else
+        {
+            await _mcpAdapter.PublishStatusAsync(
+                $"Implementation completed (backend files: {state.Backend?.ProposedFiles.Count ?? 0}, "
+                + $"frontend files: {state.Frontend?.ProposedFiles.Count ?? 0}).");
+        }
+
+        if (WorkflowFindingRules.CountProposedImplementationFiles(state) == 0)
+        {
+            string reason = WorkflowFindingRules.DescribeMissingImplementationReason(runBackend, runFrontend, state);
+            llmOutputQualityFindings.Add(new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = reason
+            });
+            state.AddTimeline($"No generated files: {reason}");
+            await _mcpAdapter.PublishStatusAsync($"No files generated — {reason}");
+        }
 
         var applyResult = await GeneratedFileApplier.ApplyAsync(state);
         RecordNuGetPackageChanges(state);
         if (applyResult.AppliedFiles.Count > 0)
         {
             state.AddTimeline($"Generated files applied: {string.Join(", ", applyResult.AppliedFiles)}");
-            await _mcpAdapter.PublishStatusAsync($"Applied {applyResult.AppliedFiles.Count} generated files to repository.");
+            await _mcpAdapter.PublishStatusAsync($"Applied {applyResult.AppliedFiles.Count} generated file(s) to repository.");
             RollbackTracker.CaptureRollbackChanges(rollbackChanges, applyResult.AppliedChanges);
+        }
+        else if (WorkflowFindingRules.CountProposedImplementationFiles(state) > 0)
+        {
+            state.AddTimeline("Developer agents proposed files but none were applied (all rejected or invalid).");
+            await _mcpAdapter.PublishStatusAsync("No files applied — all proposed files were rejected.");
         }
         else
         {
@@ -117,7 +155,9 @@ sealed partial class WorkflowOrchestrator
                 var finding = new AgentFinding
                 {
                     Severity = FindingSeverity.High,
-                    Message = $"Rejected generated file '{rejected.RelativePath}': {rejected.Reason}"
+                    Message = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
+                        rejected.RelativePath,
+                        rejected.Reason)
                 };
                 llmOutputQualityFindings.Add(finding);
                 state.AddTimeline($"Generation quality finding: [High] {finding.Message}");
@@ -151,6 +191,15 @@ sealed partial class WorkflowOrchestrator
 
             complianceFindings = ContractComplianceValidator.CollectComplianceFindings(state);
             complianceFindings.AddRange(llmOutputQualityFindings);
+        }
+
+        if (WorkflowFindingRules.CountProposedImplementationFiles(state) == 0
+            && applyResult.AppliedFiles.Count == 0)
+        {
+            state.Stage = WorkflowStage.Blocked;
+            state.AddTimeline("Workflow blocked: no implementation files were generated or applied.");
+            await _mcpAdapter.PublishStatusAsync("Workflow blocked: no files generated.");
+            return state;
         }
 
         state.Stage = WorkflowStage.Integrating;
@@ -214,7 +263,9 @@ sealed partial class WorkflowOrchestrator
                     var finding = new AgentFinding
                     {
                         Severity = FindingSeverity.High,
-                        Message = $"Rejected recovery file '{rejected.RelativePath}': {rejected.Reason}"
+                        Message = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
+                            rejected.RelativePath,
+                            rejected.Reason)
                     };
                     llmOutputQualityFindings.Add(finding);
                     state.AddTimeline($"Recovery quality finding: [High] {finding.Message}");
@@ -231,12 +282,17 @@ sealed partial class WorkflowOrchestrator
                     state.AddTimeline($"Build finding after recovery: [{finding.Severity}] {finding.Message}");
                 }
                 await _mcpAdapter.PublishStatusAsync($"Build still failing after recovery attempt {state.RecoveryAttemptCount}.");
-                await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
             }
             else
             {
                 state.AddTimeline($"Build passed after recovery attempt {state.RecoveryAttemptCount}.");
                 await _mcpAdapter.PublishStatusAsync($"Build passed after recovery attempt {state.RecoveryAttemptCount}.");
+            }
+
+            if (state.BuildValidation.Findings.Count > 0
+                || WorkflowFindingRules.HasUnresolvedApplyRejections(state))
+            {
+                await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
             }
 
             state.Stage = WorkflowStage.Auditing;

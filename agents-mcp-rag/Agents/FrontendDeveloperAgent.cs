@@ -23,28 +23,28 @@ sealed class FrontendDeveloperAgent : LlmWorkflowAgentBase
         string architecturePlan = state.Architecture?.Summary ?? string.Empty;
         var requiredPaths = WorkflowFindingRules.ExtractFrontendPaths(architecturePlan);
         string checklist = requiredPaths.Count == 0
-            ? "(extract file paths and requirements from FRONTEND_FILES in the architecture section above)"
+            ? "(no FRONTEND_FILES paths parsed — read FRONTEND_FILES from the architecture plan above)"
             : string.Join("\n", requiredPaths.Select(path => $"- {path}"));
 
         return $"""
             You are the frontend developer agent.
-            Implement the architecture plan. Use RAG exemplars for module layout and syntax.
+            Implement frontend deliverables from the architecture plan only. Use RAG exemplars for module layout.
 
             Task: {state.Task.Title}
             Task detail: {state.Task.Description}
 
-            Architecture plan (requirements only — implement from RAG, not from any sample code):
+            Architecture plan:
             {architecturePlan}
 
-            Frontend file paths from architecture (each must be in files[] with full content matching its description):
+            FRONTEND_FILES checklist (every path must be in files[] with full content):
             {checklist}
 
             Rules:
-            - Implement every path listed in FRONTEND_FILES (and frontend tasks described in the architecture plan).
-            - Follow the discovered module layout in RAG; do not invent new project roots.
-            - Return complete source files only.
+            - If there is no FRONTEND_FILES section or checklist is empty, return files: [] and a short summary.
+            - Otherwise implement every FRONTEND_FILES entry; follow module layout from RAG.
+            - Complete source files only.
 
-            Unified RAG context (exemplars and conventions):
+            Unified RAG context:
             {state.CombinedRagContext}
 
             {JsonOutputSchema}

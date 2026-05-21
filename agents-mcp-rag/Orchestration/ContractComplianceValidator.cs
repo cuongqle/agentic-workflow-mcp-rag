@@ -197,15 +197,27 @@ static class ContractComplianceValidator
             });
         }
 
-        foreach (string paramType in LayerConventionProfiles.ResolveRequiredConstructorParamTypes(state.RepoPath, subjectBase, profile))
+        string? ctorExemplarPath = LayerConventionProfiles.TryGetConstructorExemplarRelativePath(
+            state.RepoPath,
+            subjectBase,
+            profile,
+            implPath);
+        foreach (string paramType in LayerConventionProfiles.ResolveRequiredConstructorParamTypes(
+                     state.RepoPath,
+                     subjectBase,
+                     profile,
+                     implPath))
         {
             if (!implementationContent.Contains(paramType, StringComparison.Ordinal))
             {
+                string exemplarHint = string.IsNullOrWhiteSpace(ctorExemplarPath)
+                    ? string.Empty
+                    : $" Mirror {ctorExemplarPath}.";
                 findings.Add(new AgentFinding
                 {
                     Severity = FindingSeverity.High,
                     Message =
-                        $"{expectedImplementationName} should include constructor dependency '{paramType}' based on {layerLabel} conventions."
+                        $"{expectedImplementationName} should include constructor dependency '{paramType}' based on {layerLabel} conventions.{exemplarHint}"
                 });
             }
         }

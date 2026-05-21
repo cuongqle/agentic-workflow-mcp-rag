@@ -45,11 +45,12 @@ Build errors (fix every line — compiler output):
 Allowed files to edit:
 {allowedFiles}
 
-Apply rejections (must fix — files were not written to disk):
+Apply rejections (must fix — files were not written to disk; the workflow will retry until these are resolved or attempts are exhausted):
 {complianceIssues}
 
 Rules:
-- Fix every build error and every apply rejection (compiler output and apply rejections are authoritative).
+- Fix every build error and every apply rejection. Read each rejection reason literally (e.g. missing constructor dependency type 'IX') and add that dependency to the constructor.
+- When a rejection cites a layer exemplar or missing dependency, open the exemplar source in Exemplar sources and mirror its constructor signature for the target entity.
 - Match the exemplar sources above (constructors, interfaces, namespaces, file layout).
 - Return complete, valid C# or script files only (balanced braces; no truncation).
 - Edit only allowed files unless impossible.

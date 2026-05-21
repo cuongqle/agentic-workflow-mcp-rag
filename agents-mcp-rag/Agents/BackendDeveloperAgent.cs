@@ -23,29 +23,28 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
         string architecturePlan = state.Architecture?.Summary ?? string.Empty;
         var requiredPaths = WorkflowFindingRules.ExtractBackendPaths(architecturePlan);
         string checklist = requiredPaths.Count == 0
-            ? "(extract file paths and requirements from the architecture section above)"
+            ? "(no BACKEND_FILES paths parsed — read BACKEND_FILES from the architecture plan above)"
             : string.Join("\n", requiredPaths.Select(path => $"- {path}"));
 
         return $"""
             You are the backend developer agent.
-            Implement the architecture plan. Use RAG exemplars for all code structure and syntax.
+            Implement backend deliverables from the architecture plan only. Use RAG exemplars for code structure.
 
             Task: {state.Task.Title}
             Task detail: {state.Task.Description}
 
-            Architecture plan (requirements only — prose descriptions per file; implement from RAG, not from any sample code):
+            Architecture plan:
             {architecturePlan}
 
-            Backend file paths identified from architecture (each must be in files[] with a full implementation matching its description):
+            BACKEND_FILES checklist (every path must be in files[] with full implementation):
             {checklist}
 
             Rules:
-            - Implement every path listed in BACKEND_FILES (and backend tasks described in the architecture plan).
-            - Match each file's described responsibilities using the closest layer exemplar in RAG.
-            - Return complete source files only: no stubs, TODO, NotImplementedException, or placeholder comments.
-            - Every checklist path above must appear in files[].
+            - If there is no BACKEND_FILES section or checklist is empty, return files: [] and a short summary.
+            - Otherwise implement every BACKEND_FILES entry; match responsibilities using RAG exemplars.
+            - Complete source only: no stubs, TODO, NotImplementedException, or placeholder comments.
 
-            Unified RAG context (exemplars and conventions):
+            Unified RAG context:
             {state.CombinedRagContext}
 
             {JsonOutputSchema}

@@ -330,34 +330,72 @@ sealed class LayerConventionProfiles
     internal static IEnumerable<string> ResolveRequiredConstructorParamTypes(
         string repoPath,
         string subjectBase,
-        LayerConventionProfile profile)
+        LayerConventionProfile profile,
+        string? targetRelativePath = null)
     {
-        var required = new HashSet<string>(profile.RequiredConstructorParamTypes, StringComparer.Ordinal);
+        var required = new HashSet<string>(StringComparer.Ordinal);
+
         if (profile.RequireMatchingRoleInterface)
         {
             required.Add($"I{subjectBase}{profile.RoleName}");
         }
 
-        string exemplarFileName = $"{subjectBase}{profile.RoleName}.cs";
-        string? exemplarPath = Directory
-            .EnumerateFiles(repoPath, exemplarFileName, SearchOption.AllDirectories)
-            .FirstOrDefault(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                                 && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase));
-
-        if (!string.IsNullOrWhiteSpace(exemplarPath))
+        LayerExemplarConstructor? exemplar = FindExemplarConstructor(
+            repoPath,
+            targetRelativePath,
+            profile,
+            requireBaseCtorCall: false);
+        if (exemplar is null)
         {
-            string exemplarContent = File.ReadAllText(exemplarPath);
-            foreach (string paramType in profile.RequiredConstructorParamTypes)
-            {
-                if (exemplarContent.Contains(paramType, StringComparison.Ordinal))
-                {
-                    required.Add(paramType);
-                }
-            }
+            return required;
+        }
+
+        string? exemplarSubject = GetSubjectBaseName(Path.GetFileName(exemplar.SourceRelativePath), profile);
+        if (string.IsNullOrWhiteSpace(exemplarSubject))
+        {
+            return required;
+        }
+
+        foreach (string paramType in ParseConstructorParameterTypes(exemplar.ParameterList))
+        {
+            required.Add(MapEntityInDependencyType(paramType, exemplarSubject, subjectBase));
         }
 
         return required;
     }
+
+    internal static string? TryGetConstructorExemplarRelativePath(
+        string repoPath,
+        string subjectBase,
+        LayerConventionProfile profile,
+        string? targetRelativePath = null) =>
+        FindExemplarConstructor(repoPath, targetRelativePath, profile, requireBaseCtorCall: false)?.SourceRelativePath;
+
+    private static IEnumerable<string> ParseConstructorParameterTypes(string parameterList)
+    {
+        foreach (string param in parameterList.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string normalized = Regex.Replace(param.Trim(), @"\s+", " ");
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                continue;
+            }
+
+            string[] parts = normalized.Split(' ');
+            if (parts.Length >= 2)
+            {
+                yield return parts[0].Trim();
+            }
+        }
+    }
+
+    private static string MapEntityInDependencyType(
+        string paramType,
+        string exemplarEntity,
+        string targetEntity) =>
+        exemplarEntity.Equals(targetEntity, StringComparison.Ordinal)
+            ? paramType
+            : paramType.Replace(exemplarEntity, targetEntity, StringComparison.Ordinal);
 
     private static readonly Regex ConstructorPatternRegex = new(
         @"public\s+(?<class>[A-Za-z_][A-Za-z0-9_]*)\s*\((?<params>[^)]*)\)\s*(?::\s*base\s*\((?<baseArgs>[^)]*)\))?\s*\{",
@@ -377,7 +415,11 @@ sealed class LayerConventionProfiles
             return true;
         }
 
-        LayerExemplarConstructor? exemplar = FindExemplarConstructor(repoPath, relativePath, profile);
+        LayerExemplarConstructor? exemplar = FindExemplarConstructor(
+            repoPath,
+            relativePath,
+            profile,
+            requireBaseCtorCall: true);
         if (exemplar is null || MatchesExemplarConstructor(content, className, exemplar))
         {
             return true;
@@ -402,21 +444,34 @@ sealed class LayerConventionProfiles
 
     private static LayerExemplarConstructor? FindExemplarConstructor(
         string repoPath,
-        string relativePath,
-        LayerConventionProfile profile)
+        string? relativePath,
+        LayerConventionProfile profile,
+        bool requireBaseCtorCall)
     {
-        string? directory = Path.GetDirectoryName(Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        string? directory = null;
+        if (!string.IsNullOrWhiteSpace(relativePath))
+        {
+            directory = Path.GetDirectoryName(
+                Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+
         IEnumerable<string> candidates = !string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory)
             ? Directory.EnumerateFiles(directory, $"*{profile.FileSuffix}", SearchOption.TopDirectoryOnly)
             : Directory.EnumerateFiles(repoPath, $"*{profile.FileSuffix}", SearchOption.AllDirectories);
 
-        string selfFullPath = Path.GetFullPath(Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        string? selfFullPath = string.IsNullOrWhiteSpace(relativePath)
+            ? null
+            : Path.GetFullPath(Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
         foreach (string candidate in candidates
+                     .Where(path => MatchesImplementationFile(Path.GetFileName(path), profile))
                      .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
                                  && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
-                     .OrderBy(path => path.Length))
+                     .OrderByDescending(path => GetSubjectBaseName(Path.GetFileName(path), profile)?.Length ?? 0)
+                     .ThenBy(path => path, StringComparer.OrdinalIgnoreCase))
         {
-            if (Path.GetFullPath(candidate).Equals(selfFullPath, StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(selfFullPath)
+                && Path.GetFullPath(candidate).Equals(selfFullPath, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -424,8 +479,12 @@ sealed class LayerConventionProfiles
             string className = Path.GetFileNameWithoutExtension(candidate);
             Match match = ConstructorPatternRegex.Match(File.ReadAllText(candidate));
             if (!match.Success
-                || !match.Groups["class"].Value.Equals(className, StringComparison.Ordinal)
-                || !match.Groups["baseArgs"].Success)
+                || !match.Groups["class"].Value.Equals(className, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (requireBaseCtorCall && !match.Groups["baseArgs"].Success)
             {
                 continue;
             }
@@ -433,7 +492,7 @@ sealed class LayerConventionProfiles
             return new LayerExemplarConstructor(
                 Path.GetRelativePath(repoPath, candidate).Replace('\\', '/'),
                 match.Groups["params"].Value.Trim(),
-                match.Groups["baseArgs"].Value.Trim());
+                match.Groups["baseArgs"].Success ? match.Groups["baseArgs"].Value.Trim() : string.Empty);
         }
 
         return null;
