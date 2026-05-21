@@ -206,51 +206,6 @@ internal static class DependencyWiringAuditor
         || (relativePath.Contains("Program.cs", StringComparison.OrdinalIgnoreCase)
             && relativePath.Contains("Test", StringComparison.OrdinalIgnoreCase));
 
-    internal static bool TryValidateCompositionRootPreservation(
-        string existingContent,
-        string proposedContent,
-        out string reason)
-    {
-        reason = string.Empty;
-        var existingInterfaces = ExtractRegisteredInterfaceNames(existingContent);
-        if (existingInterfaces.Count == 0)
-        {
-            return true;
-        }
-
-        var proposedInterfaces = ExtractRegisteredInterfaceNames(proposedContent);
-        foreach (string iface in existingInterfaces)
-        {
-            if (!proposedInterfaces.Contains(iface))
-            {
-                reason =
-                    $"Composition root must keep existing registration for {iface}. Append new lines only; do not remove or replace pre-existing wiring.";
-                return false;
-            }
-        }
-
-        foreach (string iface in existingInterfaces)
-        {
-            if (!HasFactoryRegistration(existingContent, iface)
-                || !RegistrationPairRegex.IsMatch(proposedContent))
-            {
-                continue;
-            }
-
-            Match proposedPair = RegistrationPairRegex.Match(proposedContent);
-            if (proposedPair.Success
-                && proposedPair.Groups[1].Value.Equals(iface, StringComparison.Ordinal)
-                && !HasFactoryRegistration(proposedContent, iface))
-            {
-                reason =
-                    $"Composition root must keep factory/lambda registration for {iface}; do not replace with a direct concrete type mapping.";
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     /// <summary>Filters lines proposed for merge — only workflow-new pairs may be added.</summary>
     internal static bool IsAllowedNewRegistrationLine(string line, IReadOnlySet<string> workflowProposedPaths)
     {
@@ -298,12 +253,6 @@ internal static class DependencyWiringAuditor
 
         return string.Join(Environment.NewLine, lines.Where(line => line != string.Empty));
     }
-
-    private static bool HasFactoryRegistration(string content, string interfaceName) =>
-        content.Contains($"<{interfaceName}>", StringComparison.Ordinal)
-        && (content.Contains("=>", StringComparison.Ordinal)
-            || content.Contains("provider =>", StringComparison.OrdinalIgnoreCase)
-            || content.Contains("GetRequiredService", StringComparison.Ordinal));
 
     private static HashSet<string> CollectWorkflowIntroducedInterfaces(
         IEnumerable<GeneratedFile> proposedFiles,

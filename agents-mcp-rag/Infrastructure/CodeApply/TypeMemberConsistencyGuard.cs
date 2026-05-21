@@ -134,9 +134,6 @@ internal static class TypeMemberConsistencyGuard
         return false;
     }
 
-    internal static IReadOnlyList<string> ExtractDeclaredMembersForContext(string definitionContent) =>
-        ExtractDeclaredMembers(definitionContent).OrderBy(p => p, StringComparer.Ordinal).ToList();
-
     internal static bool TryResolveDefinitionType(
         string repoPath,
         string consumerRelativePath,

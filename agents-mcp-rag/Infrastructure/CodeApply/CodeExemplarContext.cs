@@ -136,30 +136,6 @@ static class CodeExemplarContext
         }
     }
 
-    internal static string? FindClosestExemplar(string repoPath, string targetRelativePath)
-    {
-        string targetFileName = Path.GetFileName(targetRelativePath);
-        string targetDir = Path.GetDirectoryName(targetRelativePath.Replace('\\', '/')) ?? string.Empty;
-        string targetStem = GetFileStem(targetFileName);
-
-        var candidates = Directory
-            .EnumerateFiles(repoPath, "*" + Path.GetExtension(targetFileName), SearchOption.AllDirectories)
-            .Where(path => !IsExcludedPath(path))
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .Where(relative => !relative.Equals(targetRelativePath, StringComparison.OrdinalIgnoreCase))
-            .Select(relative => new
-            {
-                Relative = relative,
-                Score = ScoreExemplar(targetRelativePath, targetFileName, targetDir, targetStem, relative)
-            })
-            .Where(x => x.Score > 0)
-            .OrderByDescending(x => x.Score)
-            .ThenBy(x => x.Relative.Length)
-            .ToList();
-
-        return candidates.FirstOrDefault()?.Relative;
-    }
-
     private static IReadOnlyList<(string RelativePath, string Reason)> FindLayerExemplars(
         string repoPath,
         IReadOnlyList<string> signals,
@@ -210,58 +186,6 @@ static class CodeExemplarContext
         sb.AppendLine(content);
     }
 
-    private static int ScoreExemplar(
-        string targetRelative,
-        string targetFileName,
-        string targetDir,
-        string targetStem,
-        string candidateRelative)
-    {
-        string candidateFileName = Path.GetFileName(candidateRelative);
-        if (candidateFileName.Equals(targetFileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return 0;
-        }
-
-        int score = 0;
-        string candidateDir = Path.GetDirectoryName(candidateRelative.Replace('\\', '/')) ?? string.Empty;
-        if (candidateDir.Equals(targetDir, StringComparison.OrdinalIgnoreCase))
-        {
-            score += 8;
-        }
-        else if (Path.GetFileName(candidateDir).Equals(Path.GetFileName(targetDir), StringComparison.OrdinalIgnoreCase))
-        {
-            score += 4;
-        }
-
-        string candidateStem = GetFileStem(candidateFileName);
-        if (ShareSameLayerSuffix(targetStem, candidateStem))
-        {
-            score += 6;
-        }
-
-        if (candidateFileName.StartsWith('I') == targetFileName.StartsWith('I'))
-        {
-            score += 1;
-        }
-
-        return score;
-    }
-
-    private static bool ShareSameLayerSuffix(string targetStem, string candidateStem)
-    {
-        foreach (string suffix in new[] { "Repository", "Service", "Controller", "Handler", "Provider", "Manager" })
-        {
-            if (targetStem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
-                && candidateStem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return targetStem.Length > 3 && candidateStem.Length > 3;
-    }
-
     private static string InferLayerKey(string relativePath)
     {
         string fileName = Path.GetFileName(relativePath);
@@ -275,11 +199,6 @@ static class CodeExemplarContext
 
         string? dir = Path.GetDirectoryName(relativePath.Replace('\\', '/'));
         return dir ?? string.Empty;
-    }
-
-    private static string GetFileStem(string fileName)
-    {
-        return Path.GetFileNameWithoutExtension(fileName);
     }
 
     private static List<string> ExtractNameTokens(string text)

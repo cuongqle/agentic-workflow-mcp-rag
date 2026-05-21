@@ -74,6 +74,7 @@ internal static class InterfaceImplementationGuard
         foreach (string iface in implementedInterfaces)
         {
             if (!TryResolveRequiredMembers(iface, interfaceDirectMembers, out HashSet<string>? required)
+                || required is null
                 || required.Count == 0)
             {
                 continue;

@@ -233,35 +233,6 @@ static class RagContextComposer
         }
     }
 
-    private static string ExtractClassSignature(string filePath)
-    {
-        foreach (var line in File.ReadLines(filePath))
-        {
-            string trimmed = line.Trim();
-            if (trimmed.StartsWith("public class ", StringComparison.Ordinal))
-            {
-                return trimmed;
-            }
-        }
-
-        return "public class ExampleRepository: Repository<Example>, IExampleRepository";
-    }
-
-    private static string ExtractConstructorSignature(string filePath)
-    {
-        string className = Path.GetFileNameWithoutExtension(filePath);
-        foreach (var line in File.ReadLines(filePath))
-        {
-            string trimmed = line.Trim();
-            if (trimmed.StartsWith($"public {className}(", StringComparison.Ordinal))
-            {
-                return trimmed;
-            }
-        }
-
-        return $"public {className}(IDbStore dbStore) : base(dbStore)";
-    }
-
     private static string Indent(string text, string prefix)
     {
         return string.Join('\n', text.Split('\n').Select(line => $"{prefix}{line}"));

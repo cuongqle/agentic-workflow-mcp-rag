@@ -331,15 +331,6 @@ internal static class TestBootstrapContext
         return testContent;
     }
 
-    internal static string? BuildProductionContractContext(
-        string repoPath,
-        string productionBaseName,
-        IReadOnlyDictionary<string, string>? proposedDefinitions = null) =>
-        TryGetProductionApi(repoPath, productionBaseName, proposedDefinitions, out string productionType, out HashSet<string> methods)
-            ? $"Authoritative {productionType} API for tests (call only these methods): "
-              + string.Join(", ", methods.OrderBy(m => m, StringComparer.Ordinal))
-            : null;
-
     private static List<string> GetInvalidSutCalls(
         string testContent,
         string productionType,

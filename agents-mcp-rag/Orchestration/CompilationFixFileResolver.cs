@@ -100,11 +100,6 @@ static class CompilationFixFileResolver
         }
     }
 
-    private static IEnumerable<string> CollectErrorSourcePaths(WorkflowState state) =>
-        (state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>())
-        .SelectMany(f => CollectErrorSourcePaths(f.Message, state.RepoPath))
-        .Distinct(StringComparer.OrdinalIgnoreCase);
-
     private static IEnumerable<string> CollectErrorSourcePaths(string message, string repoPath) =>
         ExtractFilePathsFromBuildMessage(message, repoPath)
             .Where(path => !IsArtifactPath(path) && !path.EndsWith(".AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase));

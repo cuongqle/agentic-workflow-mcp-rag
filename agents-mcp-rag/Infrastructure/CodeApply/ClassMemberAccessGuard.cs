@@ -23,25 +23,6 @@ internal static class ClassMemberAccessGuard
         @"\b(this|@this)\.([A-Za-z_][A-Za-z0-9_]*)\s*\.",
         RegexOptions.Compiled);
 
-    internal static string? BuildBaseTypeContext(string repoPath, string typeContent, string? classFileName = null) =>
-        BuildTypeContractContext(repoPath, typeContent);
-
-    internal static string? BuildTypeContractContext(string repoPath, string typeNameOrContent)
-    {
-        if (TryParseTypeDeclaration(typeNameOrContent, out string typeName, out IReadOnlyList<string> baseTypes))
-        {
-            var declaredMembers = CollectAccessibleMembers(repoPath, typeName, typeNameOrContent, baseTypes);
-            return FormatAccessibleMembers(typeName, declaredMembers);
-        }
-
-        if (!TryCollectAccessibleMembersForType(repoPath, typeNameOrContent, out string resolvedName, out HashSet<string> resolvedMembers))
-        {
-            return null;
-        }
-
-        return FormatAccessibleMembers(resolvedName, resolvedMembers);
-    }
-
     internal static IEnumerable<string> CollectInheritedTypeNames(string repoPath, string typeName)
     {
         var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -211,20 +192,6 @@ internal static class ClassMemberAccessGuard
         }
     }
 
-    private static HashSet<string> ExtractDeclaredFieldNames(string content)
-    {
-        var fields = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-                     content,
-                     @"(?:private|protected|public)\s+(?:readonly\s+)?[\w<>\[\],\s\?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
-                     RegexOptions.Multiline))
-        {
-            fields.Add(match.Groups[1].Value);
-        }
-
-        return fields;
-    }
-
     private static string? ResolveTypeContent(string repoPath, string typeName)
     {
         string? byFileName = Directory
@@ -253,30 +220,6 @@ internal static class ClassMemberAccessGuard
 
         return null;
     }
-
-    internal static bool TryCollectAccessibleMembersForType(
-        string repoPath,
-        string typeName,
-        out string resolvedTypeName,
-        out HashSet<string> members)
-    {
-        members = new HashSet<string>(StringComparer.Ordinal);
-        resolvedTypeName = typeName;
-        string? content = ResolveTypeContent(repoPath, typeName);
-        if (string.IsNullOrWhiteSpace(content)
-            || !TryParseTypeDeclaration(content, out resolvedTypeName, out IReadOnlyList<string> baseTypes))
-        {
-            return false;
-        }
-
-        members = CollectAccessibleMembers(repoPath, resolvedTypeName, content, baseTypes);
-        return members.Count > 0;
-    }
-
-    private static string? FormatAccessibleMembers(string typeName, HashSet<string> members) =>
-        members.Count == 0
-            ? null
-            : $"Accessible members on {typeName} (declared + inherited): {string.Join(", ", members.OrderBy(m => m, StringComparer.Ordinal))}";
 
     private static bool TryParseClassDeclaration(
         string content,

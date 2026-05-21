@@ -93,42 +93,6 @@ internal static class TestCoverageAuditor
             .ToList();
     }
 
-    internal static string? GetRepositoryTestsDirectory(string repoPath)
-    {
-        var conventions = DiscoverTestConventions(repoPath);
-        return conventions
-            .FirstOrDefault(c => c.ProductionFileSuffix.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase))
-            ?.TestDirectory
-            ?? conventions.FirstOrDefault()?.TestDirectory;
-    }
-
-    internal static string? GetTestsDirectory(string repoPath)
-    {
-        return DiscoverTestConventions(repoPath).FirstOrDefault()?.TestDirectory;
-    }
-
-    internal static string? BuildExpectedTestPath(string repoPath, string productionBaseName)
-    {
-        var conventions = DiscoverTestConventions(repoPath);
-        var convention = conventions.FirstOrDefault(c =>
-            productionBaseName.EndsWith(
-                Path.GetFileNameWithoutExtension(c.ProductionFileSuffix),
-                StringComparison.Ordinal))
-            ?? conventions.FirstOrDefault();
-
-        if (convention is null)
-        {
-            return null;
-        }
-
-        return $"{convention.TestDirectory}/{productionBaseName}Tests.cs";
-    }
-
-    internal static string? BuildExpectedRepositoryTestPath(string repoPath, string entityName)
-    {
-        return BuildExpectedTestPath(repoPath, $"{entityName}Repository");
-    }
-
     private static void TryAddMissingTestFinding(
         WorkflowState state,
         TestConvention convention,
@@ -223,16 +187,6 @@ internal static class TestCoverageAuditor
 
     internal static string? ExtractProductionBaseNameFromTestFileName(string testFileName) =>
         ExtractSubjectBaseNameFromTestFile(testFileName);
-
-    internal static TestConvention? FindConventionForProductionBase(
-        string repoPath,
-        string productionBaseName)
-    {
-        return DiscoverTestConventions(repoPath).FirstOrDefault(c =>
-            productionBaseName.EndsWith(
-                Path.GetFileNameWithoutExtension(c.ProductionFileSuffix),
-                StringComparison.Ordinal));
-    }
 
     private static string? ExtractSubjectBaseNameFromTestFile(string testFileName)
     {

@@ -200,9 +200,8 @@ When `dotnet build` fails (or blocking compliance is found), the orchestrator ru
 
 Called before every `RecoveryAgent` invocation (`WorkflowOrchestrator.Recovery.cs`):
 
-1. **Workspace cleanup** — remove orphan `obj/` trees and stray `.csproj` files not in the solution (`CompilationFixFileResolver.PrepareRecoveryPass`).
-2. **Allowed files** — paths derived from build messages, type symbols, contract dependencies, and error-directory siblings (`DetermineAllowedFiles`, up to 80 paths).
-3. **Exemplar sources** — full file contents inlined into `CompilationFixExemplarContext` (`CompilationFixContextBuilder`).
+1. **Allowed files** — paths derived from build messages, type symbols, contract dependencies, and error-directory siblings (`DetermineAllowedFiles`, up to 80 paths).
+2. **Exemplar sources** — full file contents inlined into `CompilationFixExemplarContext` (`CompilationFixContextBuilder`).
 
 ### What goes into the recovery prompt
 
