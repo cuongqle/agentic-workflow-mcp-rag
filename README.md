@@ -110,7 +110,15 @@ cd agents-mcp-rag
 dotnet build agents-mcp-rag.sln
 ```
 
-### 3. Run
+### 3. Run tests
+
+```bash
+dotnet test agents-mcp-rag.sln
+```
+
+Unit tests live in `agents-mcp-rag.tests` (xUnit). They cover stack routing, repo contract discovery/composition, canonical paths, build-failure classification, workflow finding rules, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
+
+### 4. Run
 
 ```bash
 dotnet run --project agents-mcp-rag/agents-mcp-rag.csproj
@@ -463,9 +471,13 @@ agents-mcp-rag/
     │   └── Kernel/
     └── Models/
         └── WorkflowModels.cs
+└── agents-mcp-rag.tests/          # xUnit tests (InternalsVisibleTo)
+    ├── Helpers/                   # TempRepo, WorkflowStateBuilder
+    ├── Infrastructure/
+    ├── Orchestration/
+    ├── CodeApply/
+    └── Agents/
 ```
-
----
 
 ## Configuration reference
 

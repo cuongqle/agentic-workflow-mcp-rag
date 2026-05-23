@@ -10,6 +10,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <InternalsVisibleTo Include="agents-mcp-rag.tests" />
+    </ItemGroup>
+
+    <ItemGroup>
       <Using Include="agents_mcp_rag.Infrastructure" />
       <Using Include="agents_mcp_rag.Infrastructure.Compliance.DotNet" />
       <Using Include="agents_mcp_rag.Infrastructure.CodeApply.DotNet" />
