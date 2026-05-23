@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <RootNamespace>agents_mcp_rag</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="agents-mcp-rag" />
+        <InternalsVisibleTo Include="agents-mcp-rag.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\agents-mcp-rag.Core\agents-mcp-rag.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="agents_mcp_rag.Orchestration" />
+        <Using Include="agents_mcp_rag.Infrastructure" />
+        <Using Include="agents_mcp_rag.Orchestration.Compliance" />
+        <Using Include="agents_mcp_rag.Orchestration.Stacks" />
+        <Using Include="agents_mcp_rag.Configuration" />
+        <Using Include="agents_mcp_rag.Infrastructure.Compliance.DotNet" />
+        <Using Include="agents_mcp_rag.Infrastructure.CodeApply.DotNet" />
+        <Using Include="agents_mcp_rag.Infrastructure.Rag.DotNet" />
+        <Using Include="agents_mcp_rag.Infrastructure.BuildValidation.DotNet" />
+    </ItemGroup>
+
+</Project>

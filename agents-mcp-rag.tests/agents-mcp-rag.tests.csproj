@@ -5,7 +5,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
-        <RootNamespace>agents_mcp_rag.tests</RootNamespace>
+        <RootNamespace>agents_mcp_rag.Tests</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
@@ -20,11 +20,16 @@
     <ItemGroup>
         <Using Include="Xunit" />
         <Using Include="agents_mcp_rag.Infrastructure" />
+        <Using Include="agents_mcp_rag.Orchestration" />
+        <Using Include="agents_mcp_rag.Orchestration.Compliance" />
+        <Using Include="agents_mcp_rag.Orchestration.Stacks" />
         <Using Include="agents_mcp_rag.Infrastructure.Compliance.DotNet" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\agents-mcp-rag\agents-mcp-rag.csproj" />
+        <ProjectReference Include="..\agents-mcp-rag.Core\agents-mcp-rag.Core.csproj" />
+        <ProjectReference Include="..\agents-mcp-rag.PlugIns.DotNet\agents-mcp-rag.PlugIns.DotNet.csproj" />
     </ItemGroup>
 
 </Project>

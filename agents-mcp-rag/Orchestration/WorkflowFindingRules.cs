@@ -7,13 +7,8 @@ static class WorkflowFindingRules
         @"```[\s\S]*?```",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
-    public static List<GeneratedFile> GetAllProposedFiles(WorkflowState state)
-    {
-        return (state.Backend?.ProposedFiles ?? new List<GeneratedFile>())
-            .Concat(state.Frontend?.ProposedFiles ?? new List<GeneratedFile>())
-            .Concat(state.Recovery?.ProposedFiles ?? new List<GeneratedFile>())
-            .ToList();
-    }
+    public static List<GeneratedFile> GetAllProposedFiles(WorkflowState state) =>
+        ProposedFileSupport.GetAllProposedFiles(state);
 
     public static bool HasBlockingFindings(IEnumerable<AgentFinding> findings)
     {

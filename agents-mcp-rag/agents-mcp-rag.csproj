@@ -10,11 +10,20 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <InternalsVisibleTo Include="agents-mcp-rag.tests" />
+      <InternalsVisibleTo Include="agents-mcp-rag.Tests" />
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\agents-mcp-rag.Core\agents-mcp-rag.Core.csproj" />
+      <ProjectReference Include="..\agents-mcp-rag.PlugIns.DotNet\agents-mcp-rag.PlugIns.DotNet.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Using Include="agents_mcp_rag.Orchestration" />
       <Using Include="agents_mcp_rag.Infrastructure" />
+      <Using Include="agents_mcp_rag.Orchestration.Compliance" />
+      <Using Include="agents_mcp_rag.Orchestration.Stacks" />
+      <Using Include="agents_mcp_rag.Configuration" />
       <Using Include="agents_mcp_rag.Infrastructure.Compliance.DotNet" />
       <Using Include="agents_mcp_rag.Infrastructure.CodeApply.DotNet" />
       <Using Include="agents_mcp_rag.Infrastructure.Rag.DotNet" />

@@ -4,7 +4,7 @@ static class GeneratedFileApplier
 {
     public static Task<ApplyResult> ApplyAsync(WorkflowState state)
     {
-        var ctx = ApplyContext.Create(state);
+        var ctx = ApplyContextFactory.Create(state);
         var applied = new List<string>();
         var rejected = new List<ApplyIssue>();
         var appliedChanges = new List<AppliedFileChange>();
@@ -53,29 +53,8 @@ static class GeneratedFileApplier
         return Task.FromResult(new ApplyResult(applied, rejected, appliedChanges));
     }
 
-    public static Task RollbackAsync(string repoPath, IReadOnlyList<AppliedFileChange> changes)
-    {
-        string repoRoot = Path.GetFullPath(repoPath);
-        foreach (var change in changes.Reverse())
-        {
-            string fullPath = Path.GetFullPath(Path.Combine(repoPath, change.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
-            if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (change.ExistedBeforeApply)
-            {
-                File.WriteAllText(fullPath, change.PreviousContent ?? string.Empty);
-            }
-            else if (File.Exists(fullPath))
-            {
-                File.Delete(fullPath);
-            }
-        }
-
-        return Task.CompletedTask;
-    }
+    public static Task RollbackAsync(string repoPath, IReadOnlyList<AppliedFileChange> changes) =>
+        ApplyRollback.RollbackAsync(repoPath, changes);
 
     internal static IReadOnlyList<GeneratedFile> GetOrderedGeneratedFiles(WorkflowState state)
     {

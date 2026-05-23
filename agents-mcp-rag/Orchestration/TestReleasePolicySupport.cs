@@ -1,40 +1,48 @@
 using agents_mcp_rag.Infrastructure;
 
 /// <summary>
-/// Routes test quarantine and release policy by <see cref="RepoStack"/>.
-/// DotNet: quarantine failing *Tests.cs artifacts when production compiles.
-/// Other stacks: no-op until stack-specific policy is added.
+/// Composite test quarantine and release policy — delegates to registered stack modules.
 /// </summary>
 static class TestReleasePolicySupport
 {
-    public static bool ShouldAttemptQuarantine(WorkflowState state) =>
-        RepoStack.From(state).DotNet && DotNetTestReleasePolicySupport.ShouldAttemptQuarantine(state);
+    public static bool ShouldAttemptQuarantine(WorkflowState state)
+    {
+        StackModuleRegistration.RegisterDefaults();
+        RepoStack stack = RepoStack.From(state);
+        return StackModuleRegistry.TestReleasePolicies(stack)
+            .Any(policy => policy.ShouldAttemptQuarantine(state));
+    }
 
-    public static Task<bool> TryQuarantineAsync(
+    public static async Task<bool> TryQuarantineAsync(
         WorkflowState state,
         Dictionary<string, AppliedFileChange> rollbackChanges,
         Func<WorkflowState, CancellationToken, Task<AgentResult>> revalidateBuildAsync,
         Func<string, Task> publishStatusAsync,
         CancellationToken cancellationToken)
     {
-        if (!RepoStack.From(state).DotNet)
+        StackModuleRegistration.RegisterDefaults();
+        RepoStack stack = RepoStack.From(state);
+        bool quarantined = false;
+        foreach (ITestReleasePolicy policy in StackModuleRegistry.TestReleasePolicies(stack))
         {
-            return Task.FromResult(false);
+            quarantined |= await policy.TryQuarantineAsync(
+                state,
+                rollbackChanges,
+                revalidateBuildAsync,
+                publishStatusAsync,
+                cancellationToken);
         }
 
-        return DotNetTestReleasePolicySupport.TryQuarantineAsync(
-            state,
-            rollbackChanges,
-            revalidateBuildAsync,
-            publishStatusAsync,
-            cancellationToken);
+        return quarantined;
     }
 
     public static void ApplyReleasePolicy(WorkflowState state)
     {
-        if (RepoStack.From(state).DotNet)
+        StackModuleRegistration.RegisterDefaults();
+        RepoStack stack = RepoStack.From(state);
+        foreach (ITestReleasePolicy policy in StackModuleRegistry.TestReleasePolicies(stack))
         {
-            DotNetTestReleasePolicySupport.ApplyReleasePolicy(state);
+            policy.ApplyReleasePolicy(state);
         }
     }
 

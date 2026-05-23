@@ -1,3 +1,5 @@
+using agents_mcp_rag.Infrastructure;
+
 static class ComplianceRuleRegistry
 {
     private static IReadOnlyList<IComplianceRule> Shared { get; } =
@@ -11,9 +13,10 @@ static class ComplianceRuleRegistry
 
     public static IReadOnlyList<IComplianceRule> For(RepoStack stack)
     {
+        StackModuleRegistration.RegisterDefaults();
+
         var rules = new List<IComplianceRule>(Shared);
-        stack.WhenFrontend(() => rules.AddRange(FrontendComplianceRules.All));
-        stack.WhenDotNet(() => rules.AddRange(DotNetComplianceRules.All));
+        rules.AddRange(StackModuleRegistry.ComplianceRules(stack));
         return rules;
     }
 }
