@@ -289,8 +289,7 @@ sealed partial class WorkflowOrchestrator
                 await _mcpAdapter.PublishStatusAsync($"Build passed after recovery attempt {state.RecoveryAttemptCount}.");
             }
 
-            if (state.BuildValidation.Findings.Count > 0
-                || WorkflowFindingRules.HasUnresolvedApplyRejections(state))
+            if (WorkflowFindingRules.HasUnresolvedCompilationProblems(state))
             {
                 await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
             }
@@ -308,12 +307,17 @@ sealed partial class WorkflowOrchestrator
             state.Audit.Findings.AddRange(state.BuildValidation.Findings);
         }
 
-        ApplyTestFailureReleasePolicy(state);
+        TestReleasePolicySupport.ApplyReleasePolicy(state);
 
-        if (ShouldAttemptTestQuarantine(state))
+        if (TestReleasePolicySupport.ShouldAttemptQuarantine(state))
         {
-            await TryQuarantineTestArtifactsAsync(state, rollbackChanges, cancellationToken);
-            RefreshAutomatedComplianceAuditFindings(state, llmOutputQualityFindings);
+            await TestReleasePolicySupport.TryQuarantineAsync(
+                state,
+                rollbackChanges,
+                _buildValidationAgent.ExecuteAsync,
+                _mcpAdapter.PublishStatusAsync,
+                cancellationToken);
+            TestReleasePolicySupport.RefreshComplianceAuditFindings(state, llmOutputQualityFindings);
         }
 
         if (AuditorAgent.HasBlockingFindings(state.Audit))

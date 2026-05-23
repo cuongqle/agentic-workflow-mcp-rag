@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 /// <summary>
 /// Keeps test/production projects aligned with NuGet packages referenced by generated code and build errors (CS0246).

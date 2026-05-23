@@ -57,6 +57,19 @@ internal sealed class RepoContract
     public string? RepositoryInterfacesNamespace { get; init; }
     public IReadOnlyList<string> ConsumerSuffixes { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> CompositionRootPaths { get; init; } = Array.Empty<string>();
+    public RegistrationScopeConvention RegistrationScope { get; init; } = RegistrationScopeConvention.None;
+
+    /// <summary>True when repo discovery found .NET backend signals (DI scope, composition roots, layer conventions, etc.).</summary>
+    public bool HasDotNetBackend =>
+        RegistrationScope.IsDiscovered
+        || CompositionRootPaths.Count > 0
+        || LayerConventions.GetActiveProfiles().Any();
+
+    /// <summary>True when repo discovery found a frontend module layout.</summary>
+    public bool HasFrontend => Frontend is not null;
+
+    /// <summary>Stack flags for routing apply/RAG/compliance/recovery without repeated property reads.</summary>
+    public RepoStack Stack => RepoStack.From(this);
 
     public string ResolveCanonicalRelativePath(string relativePath, string content)
     {

@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
 /// Prevents the workflow from rewriting pre-existing interfaces, base stores, and infrastructure types.

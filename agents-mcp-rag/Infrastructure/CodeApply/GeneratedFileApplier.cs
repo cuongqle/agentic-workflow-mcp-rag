@@ -1,147 +1,34 @@
 using System.Text.RegularExpressions;
-using System.Text;
-using agents_mcp_rag.Infrastructure;
+
+namespace agents_mcp_rag.Infrastructure;
 
 static class GeneratedFileApplier
 {
     public static Task<ApplyResult> ApplyAsync(WorkflowState state)
     {
+        var ctx = ApplyContext.Create(state);
         var applied = new List<string>();
         var rejected = new List<ApplyIssue>();
         var appliedChanges = new List<AppliedFileChange>();
-        string repoRoot = Path.GetFullPath(state.RepoPath);
-        RepoContract contract = state.Contract ?? RepoContractDiscoverer.Discover(state.RepoPath);
-        var conventions = contract.LayerConventions;
-        var generatedFiles = OrderFilesForApply(EnumerateGeneratedFiles(state).ToList());
-        var workflowProposedPaths = new HashSet<string>(
-            generatedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
-            StringComparer.OrdinalIgnoreCase);
-        var interfaceDirectMembers = InterfaceImplementationGuard.BuildDirectMemberCatalog(state.RepoPath, generatedFiles);
-        var interfaceCatalog = BuildInterfaceCatalog(state.RepoPath, generatedFiles);
-        var typeNamespaceCatalog = BuildTypeNamespaceCatalog(state.RepoPath, generatedFiles);
-        var proposedDefinitions = TypeMemberConsistencyGuard.BuildProposedTypeDefinitions(generatedFiles);
-        var declaredTypePaths = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var generatedFile in generatedFiles)
+        foreach (var generatedFile in ctx.GeneratedFiles)
         {
-            string relativePath = generatedFile.RelativePath.Replace('\\', '/').Trim();
-            if (string.IsNullOrWhiteSpace(relativePath))
+            if (!TryPrepare(ctx, generatedFile, out string relativePath, out string fullPath, out bool existedBefore, out string? existingOnDisk, out string? prepareIssue))
             {
-                continue;
-            }
-
-            if (Path.IsPathRooted(relativePath))
-            {
-                continue;
-            }
-
-            relativePath = contract.ResolveCanonicalRelativePath(relativePath, generatedFile.Content);
-            if (relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
-            {
-                rejected.Add(new ApplyIssue(
-                    relativePath,
-                    "Rejected generated artifact path (obj/bin). Fix the owning .csproj or Properties/AssemblyInfo.cs instead."));
-                continue;
-            }
-
-            string? declaredType = TryExtractDeclaredTypeName(generatedFile.Content);
-            if (!string.IsNullOrWhiteSpace(declaredType)
-                && declaredTypePaths.TryGetValue(declaredType, out string? priorPath))
-            {
-                relativePath = priorPath;
-            }
-
-            if (!TryResolveDuplicateToExistingPath(state.RepoPath, relativePath, generatedFile.Content, out relativePath, out string? duplicateResolutionIssue))
-            {
-                rejected.Add(new ApplyIssue(relativePath, duplicateResolutionIssue ?? "Duplicate resolution failed."));
-                continue;
-            }
-            relativePath = relativePath.TrimStart('/');
-            if (!string.IsNullOrWhiteSpace(declaredType))
-            {
-                declaredTypePaths[declaredType] = relativePath;
-            }
-            string fullPath = Path.GetFullPath(Path.Combine(state.RepoPath, relativePath));
-            if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                rejected.Add(new ApplyIssue(relativePath, "Rejected path outside repository root."));
-                continue;
-            }
-
-            string? directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            string content = NormalizeContent(
-                relativePath,
-                generatedFile.Content,
-                contract.RepositoryInterfacesNamespace,
-                typeNamespaceCatalog);
-            content = TryNormalizeLayerTestContent(relativePath, content, state.RepoPath);
-            bool existedBefore = File.Exists(fullPath);
-            string? existingOnDisk = existedBefore ? File.ReadAllText(fullPath) : null;
-            if (!PreExistingContractGuard.TryValidateOverwrite(
-                    relativePath,
-                    existingOnDisk,
-                    content,
-                    workflowProposedPaths,
-                    out string contractReason))
-            {
-                rejected.Add(new ApplyIssue(relativePath, contractReason));
-                continue;
-            }
-
-            if (TypeMemberConsistencyGuard.IsConsumerRelativePath(state.RepoPath, relativePath, proposedDefinitions)
-                && !TypeMemberConsistencyGuard.TryValidateConsumerContent(
-                    state.RepoPath,
-                    relativePath,
-                    content,
-                    proposedDefinitions,
-                    out string consumerReason))
-            {
-                rejected.Add(new ApplyIssue(relativePath, consumerReason));
-                continue;
-            }
-
-            if (DependencyWiringAuditor.IsCompositionRootPath(relativePath))
-            {
-                if (!CompositionRootMerger.TryMergeIntoExisting(
-                        existingOnDisk ?? string.Empty,
-                        content,
-                        out string mergedBootstrap,
-                        out string? mergeReason,
-                        workflowProposedPaths))
+                if (!string.IsNullOrWhiteSpace(prepareIssue))
                 {
-                    rejected.Add(new ApplyIssue(
-                        relativePath,
-                        mergeReason ?? "Rejected invalid composition-root rewrite; append DI registration lines only."));
-                    continue;
+                    string path = generatedFile.RelativePath.Replace('\\', '/').Trim();
+                    rejected.Add(new ApplyIssue(path, prepareIssue));
                 }
 
-                content = mergedBootstrap;
-            }
-
-            if (contract.Entity is not null
-                && !contract.Entity.ValidateEntityContent(relativePath, content, out string entityReason))
-            {
-                rejected.Add(new ApplyIssue(relativePath, entityReason));
                 continue;
             }
 
-            if (!IsLikelyValidSource(
-                    relativePath,
-                    content,
-                    existedBefore,
-                    state.RepoPath,
-                    conventions,
-                    interfaceCatalog,
-                    interfaceDirectMembers,
-                    out string reason))
+            string content = NormalizeContent(ctx, relativePath, generatedFile.Content);
+
+            if (!TryValidate(ctx, relativePath, content, existedBefore, existingOnDisk, out content, out string? validateReason))
             {
-                rejected.Add(new ApplyIssue(relativePath, reason));
+                rejected.Add(new ApplyIssue(relativePath, validateReason!));
                 continue;
             }
 
@@ -151,17 +38,243 @@ static class GeneratedFileApplier
             appliedChanges.Add(new AppliedFileChange(relativePath, existedBefore, previousContent));
         }
 
-        foreach (string autoApplied in DependencyWiringAuditor.ApplyMissingRegistrations(state))
+        foreach (string autoApplied in ctx.Stack.WhenDotNet(
+            DependencyWiringAuditor.ApplyMissingRegistrations(state)))
         {
             applied.Add(autoApplied);
         }
 
-        foreach (string repaired in RepairCompositionRootFiles(state.RepoPath))
+        ctx.Stack.WhenDotNet(() =>
         {
-            applied.Add(repaired);
-        }
+            foreach (string repaired in RepairCompositionRootFiles(ctx.RepoPath))
+            {
+                applied.Add(repaired);
+            }
+        });
 
         return Task.FromResult(new ApplyResult(applied, rejected, appliedChanges));
+    }
+
+    public static Task RollbackAsync(string repoPath, IReadOnlyList<AppliedFileChange> changes)
+    {
+        string repoRoot = Path.GetFullPath(repoPath);
+        foreach (var change in changes.Reverse())
+        {
+            string fullPath = Path.GetFullPath(Path.Combine(repoPath, change.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+            if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (change.ExistedBeforeApply)
+            {
+                File.WriteAllText(fullPath, change.PreviousContent ?? string.Empty);
+            }
+            else if (File.Exists(fullPath))
+            {
+                File.Delete(fullPath);
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    internal static IReadOnlyList<GeneratedFile> GetOrderedGeneratedFiles(WorkflowState state) =>
+        OrderFilesForApply(EnumerateGeneratedFiles(state).ToList());
+
+    private static string NormalizeContent(ApplyContext ctx, string relativePath, string content)
+    {
+        if (ctx.Stack.DotNet && relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return CSharpApplySupport.Normalize(ctx, relativePath, content);
+        }
+
+        return content;
+    }
+
+    private static bool TryValidate(
+        ApplyContext ctx,
+        string relativePath,
+        string content,
+        bool existedBefore,
+        string? existingOnDisk,
+        out string validatedContent,
+        out string? reason)
+    {
+        validatedContent = content;
+        reason = null;
+
+        if (!CSharpApplySupport.TryValidateCommonShape(content, existedBefore, out reason))
+        {
+            return false;
+        }
+
+        if (ctx.Stack.DotNet && !TryValidateDotNet(ctx, relativePath, content, existedBefore, existingOnDisk, ref validatedContent, out reason))
+        {
+            return false;
+        }
+
+        return TryValidateByExtension(relativePath, validatedContent, out reason);
+    }
+
+    private static bool TryValidateDotNet(
+        ApplyContext ctx,
+        string relativePath,
+        string content,
+        bool existedBefore,
+        string? existingOnDisk,
+        ref string validatedContent,
+        out string? reason)
+    {
+        reason = null;
+
+        if (!PreExistingContractGuard.TryValidateOverwrite(
+                relativePath, existingOnDisk, content, ctx.WorkflowProposedPaths, out string contractReason))
+        {
+            reason = contractReason;
+            return false;
+        }
+
+        if (TypeMemberConsistencyGuard.IsConsumerRelativePath(ctx.RepoPath, relativePath, ctx.ProposedTypeDefinitions)
+            && !TypeMemberConsistencyGuard.TryValidateConsumerContent(
+                ctx.RepoPath, relativePath, content, ctx.ProposedTypeDefinitions, out string consumerReason))
+        {
+            reason = consumerReason;
+            return false;
+        }
+
+        if (DependencyWiringAuditor.IsCompositionRootPath(relativePath))
+        {
+            if (!CompositionRootMerger.TryMergeIntoExisting(
+                    existingOnDisk ?? string.Empty,
+                    content,
+                    out string mergedBootstrap,
+                    out string? mergeReason,
+                    ctx.WorkflowProposedPaths))
+            {
+                reason = mergeReason ?? "Rejected invalid composition-root rewrite; append DI registration lines only.";
+                return false;
+            }
+
+            validatedContent = mergedBootstrap;
+            content = mergedBootstrap;
+        }
+
+        if (ctx.Contract.Entity is not null
+            && !ctx.Contract.Entity.ValidateEntityContent(relativePath, content, out string entityReason))
+        {
+            reason = entityReason;
+            return false;
+        }
+
+        if (relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && !CSharpApplySupport.TryValidate(ctx, relativePath, content, existedBefore, out reason))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryValidateByExtension(string relativePath, string content, out string? reason)
+    {
+        reason = null;
+        string extension = Path.GetExtension(relativePath).ToLowerInvariant();
+
+        if (extension is ".js" or ".ts" or ".tsx" or ".jsx")
+        {
+            string trimmed = content.Trim();
+            bool hasScriptShape =
+                trimmed.Contains("function", StringComparison.Ordinal)
+                || trimmed.Contains("=>", StringComparison.Ordinal)
+                || trimmed.Contains("class ", StringComparison.Ordinal)
+                || trimmed.Contains("const ", StringComparison.Ordinal)
+                || trimmed.Contains("let ", StringComparison.Ordinal)
+                || trimmed.Contains("var ", StringComparison.Ordinal)
+                || trimmed.Contains("angular.", StringComparison.OrdinalIgnoreCase);
+            if (!hasScriptShape)
+            {
+                reason = "Script output missing expected function/class/module constructs.";
+                return false;
+            }
+        }
+        else if (extension == ".html")
+        {
+            string trimmed = content.Trim();
+            if (!trimmed.Contains("<", StringComparison.Ordinal) || !trimmed.Contains(">", StringComparison.Ordinal))
+            {
+                reason = "HTML output missing markup tags.";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryPrepare(
+        ApplyContext ctx,
+        GeneratedFile generatedFile,
+        out string relativePath,
+        out string fullPath,
+        out bool existedBefore,
+        out string? existingOnDisk,
+        out string? issue)
+    {
+        relativePath = string.Empty;
+        fullPath = string.Empty;
+        existedBefore = false;
+        existingOnDisk = null;
+        issue = null;
+
+        relativePath = generatedFile.RelativePath.Replace('\\', '/').Trim();
+        if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
+        {
+            return false;
+        }
+
+        relativePath = ctx.Contract.ResolveCanonicalRelativePath(relativePath, generatedFile.Content);
+        if (relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+        {
+            issue = "Rejected generated artifact path (obj/bin). Fix the owning .csproj or Properties/AssemblyInfo.cs instead.";
+            return false;
+        }
+
+        string? declaredType = TryExtractDeclaredTypeName(generatedFile.Content);
+        if (!string.IsNullOrWhiteSpace(declaredType)
+            && ctx.DeclaredTypePaths.TryGetValue(declaredType, out string? priorPath))
+        {
+            relativePath = priorPath;
+        }
+
+        if (!TryResolveDuplicateToExistingPath(ctx.RepoPath, relativePath, generatedFile.Content, out relativePath, out issue))
+        {
+            issue ??= "Duplicate resolution failed.";
+            return false;
+        }
+
+        relativePath = relativePath.TrimStart('/');
+        if (!string.IsNullOrWhiteSpace(declaredType))
+        {
+            ctx.DeclaredTypePaths[declaredType] = relativePath;
+        }
+
+        fullPath = Path.GetFullPath(Path.Combine(ctx.RepoPath, relativePath));
+        if (!fullPath.StartsWith(ctx.RepoRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            issue = "Rejected path outside repository root.";
+            return false;
+        }
+
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        existedBefore = File.Exists(fullPath);
+        existingOnDisk = existedBefore ? File.ReadAllText(fullPath) : null;
+        return true;
     }
 
     private static IEnumerable<string> RepairCompositionRootFiles(string repoPath)
@@ -191,28 +304,58 @@ static class GeneratedFileApplier
         }
     }
 
-    public static Task RollbackAsync(string repoPath, IReadOnlyList<AppliedFileChange> changes)
+    private static IEnumerable<GeneratedFile> EnumerateGeneratedFiles(WorkflowState state)
     {
-        string repoRoot = Path.GetFullPath(repoPath);
-        foreach (var change in changes.Reverse())
+        if (state.Stage is WorkflowStage.Recovering or WorkflowStage.Integrating)
         {
-            string fullPath = Path.GetFullPath(Path.Combine(repoPath, change.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
-            if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (change.ExistedBeforeApply)
-            {
-                File.WriteAllText(fullPath, change.PreviousContent ?? string.Empty);
-            }
-            else if (File.Exists(fullPath))
-            {
-                File.Delete(fullPath);
-            }
+            return state.Recovery?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>();
         }
 
-        return Task.CompletedTask;
+        return (state.Backend?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>())
+            .Concat(state.Frontend?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>());
+    }
+
+    private static List<GeneratedFile> OrderFilesForApply(IReadOnlyList<GeneratedFile> files) =>
+        files
+            .OrderBy(f => GetApplyPriority(f.RelativePath))
+            .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static int GetApplyPriority(string relativePath)
+    {
+        string fileName = Path.GetFileName(relativePath);
+        if (fileName.StartsWith('I') && fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (relativePath.Contains("/Entities/", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains("/Models/", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+
+        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase) && !fileName.StartsWith('I'))
+        {
+            return 4;
+        }
+
+        if (fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 5;
+        }
+
+        if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 6;
+        }
+
+        return 3;
     }
 
     private static string? TryExtractDeclaredTypeName(string content)
@@ -247,7 +390,6 @@ static class GeneratedFileApplier
         resolvedRelativePath = relativePath.Replace('\\', '/').TrimStart('/');
         issue = null;
         string targetPath = resolvedRelativePath;
-
         string fileName = Path.GetFileName(targetPath);
         if (string.IsNullOrWhiteSpace(fileName))
         {
@@ -279,7 +421,6 @@ static class GeneratedFileApplier
             if (!string.IsNullOrWhiteSpace(preferred))
             {
                 resolvedRelativePath = preferred;
-                targetPath = preferred;
                 return true;
             }
 
@@ -292,7 +433,6 @@ static class GeneratedFileApplier
             }
         }
 
-        targetPath = resolvedRelativePath;
         var existingMatches = Directory.EnumerateFiles(repoPath, fileName, SearchOption.AllDirectories)
             .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
                         && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
@@ -305,7 +445,8 @@ static class GeneratedFileApplier
             return true;
         }
 
-        if (existingMatches.Any(match => match.Equals(targetPath, StringComparison.OrdinalIgnoreCase)))
+        string resolvedPath = resolvedRelativePath;
+        if (existingMatches.Any(match => match.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }
@@ -325,6 +466,7 @@ static class GeneratedFileApplier
                 {
                     return false;
                 }
+
                 string existing = File.ReadAllText(absolute);
                 return existing.Contains($"class {className}", StringComparison.Ordinal)
                        || existing.Contains($"interface {className}", StringComparison.Ordinal)
@@ -340,777 +482,5 @@ static class GeneratedFileApplier
 
         issue = $"Ambiguous duplicate target for '{fileName}'. Existing candidates: {string.Join(", ", existingMatches)}";
         return false;
-    }
-
-    private static string NormalizeContent(
-        string relativePath,
-        string content,
-        string? repositoryInterfacesNamespace,
-        TypeNamespaceCatalog typeNamespaceCatalog)
-    {
-        string fileName = Path.GetFileName(relativePath);
-        if (!string.IsNullOrWhiteSpace(fileName)
-            && fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !fileName.StartsWith("I", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(repositoryInterfacesNamespace)
-            && content.Contains("I", StringComparison.Ordinal)
-            && content.Contains("Repository", StringComparison.Ordinal)
-            && !content.Contains($"using {repositoryInterfacesNamespace};", StringComparison.Ordinal))
-        {
-            content = InsertUsingDirective(content, $"using {repositoryInterfacesNamespace};");
-        }
-
-        return EnsureReferencedTypeUsings(content, typeNamespaceCatalog);
-    }
-
-    private static string EnsureReferencedTypeUsings(string content, TypeNamespaceCatalog catalog)
-    {
-        if (catalog.IsEmpty)
-        {
-            return content;
-        }
-
-        string? currentNamespace = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-            .Select(line => line.Trim())
-            .FirstOrDefault(line => line.StartsWith("namespace ", StringComparison.Ordinal))
-            ?.Substring("namespace ".Length)
-            .Trim();
-
-        var existingUsings = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-            .Select(line => line.Trim())
-            .Where(line => line.StartsWith("using ", StringComparison.Ordinal) && line.EndsWith(";", StringComparison.Ordinal))
-            .Select(line => line.Substring("using ".Length, line.Length - "using ".Length - 1).Trim())
-            .ToHashSet(StringComparer.Ordinal);
-
-        var declaredTypes = Regex.Matches(content, @"\b(class|interface|record|struct)\s+([A-Za-z_][A-Za-z0-9_]*)")
-            .Select(match => match.Groups[2].Value)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var usedTypeCandidates = Regex.Matches(content, @"\b([A-Z][A-Za-z0-9_]*)\b")
-            .Select(match => match.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal)
-            .Where(typeName => !declaredTypes.Contains(typeName))
-            .ToList();
-
-        foreach (var typeName in usedTypeCandidates)
-        {
-            if (!catalog.TryGetUniqueNamespace(typeName, out string? ns) || string.IsNullOrWhiteSpace(ns))
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(currentNamespace)
-                && ns.Equals(currentNamespace, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (existingUsings.Contains(ns))
-            {
-                continue;
-            }
-
-            content = InsertUsingDirective(content, $"using {ns};");
-            existingUsings.Add(ns);
-        }
-
-        return content;
-    }
-
-    private static string InsertUsingDirective(string content, string directive)
-    {
-        var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
-        if (lines.Any(line => line.Trim().Equals(directive, StringComparison.Ordinal)))
-        {
-            return content;
-        }
-
-        int insertIndex = 0;
-        while (insertIndex < lines.Count && lines[insertIndex].Trim().StartsWith("using ", StringComparison.Ordinal))
-        {
-            insertIndex++;
-        }
-
-        lines.Insert(insertIndex, directive);
-        var builder = new StringBuilder();
-        for (int i = 0; i < lines.Count; i++)
-        {
-            builder.Append(lines[i]);
-            if (i < lines.Count - 1)
-            {
-                builder.Append('\n');
-            }
-        }
-
-        return builder.ToString();
-    }
-
-    private static IEnumerable<GeneratedFile> EnumerateGeneratedFiles(WorkflowState state)
-    {
-        if (state.Stage == WorkflowStage.Recovering)
-        {
-            return state.Recovery?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>();
-        }
-
-        if (state.Stage == WorkflowStage.Integrating)
-        {
-            return state.Recovery?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>();
-        }
-
-        return (state.Backend?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>())
-            .Concat(state.Frontend?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>());
-    }
-
-    private static string TryNormalizeLayerTestContent(string relativePath, string content, string repoPath)
-    {
-        string fileName = Path.GetFileName(relativePath);
-        if (!fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return content;
-        }
-
-        content = TestBootstrapContext.NormalizeResolutionAccess(content, repoPath);
-        content = TestBootstrapContext.NormalizeTestLiteralTypes(content, repoPath);
-
-        string? productionBaseName = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(fileName);
-        if (!string.IsNullOrWhiteSpace(productionBaseName))
-        {
-            content = TestBootstrapContext.SynchronizeProductionMembers(repoPath, productionBaseName, content);
-        }
-
-        if (CodeExemplarContext.TryValidate(content, out _)
-            && TestBootstrapContext.TryValidateTestResolution(content, repoPath, out _)
-            && TestBootstrapContext.TryValidateTestLiteralTypes(content, repoPath, out _)
-            && (string.IsNullOrWhiteSpace(productionBaseName)
-                || TestBootstrapContext.TryValidateProductionMembers(repoPath, content, productionBaseName, proposedDefinitions: null, out _)))
-        {
-            return content;
-        }
-
-        if (!string.IsNullOrWhiteSpace(productionBaseName)
-            && LayerTestTemplateBuilder.TryBuildFromExemplar(repoPath, productionBaseName, out string templated))
-        {
-            return templated;
-        }
-
-        return content;
-    }
-
-    private static bool IsLikelyValidSource(
-        string relativePath,
-        string content,
-        bool isOverwritingExistingFile,
-        string repoPath,
-        LayerConventionProfiles conventions,
-        InterfaceCatalog interfaceCatalog,
-        IReadOnlyDictionary<string, HashSet<string>> interfaceDirectMembers,
-        out string reason)
-    {
-        reason = string.Empty;
-        string extension = Path.GetExtension(relativePath).ToLowerInvariant();
-        string trimmed = content.Trim();
-        int lineCount = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).Length;
-
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            reason = "Generated content is empty.";
-            return false;
-        }
-
-        if (trimmed.Length < 40)
-        {
-            reason = "Generated content is too short to be a real source file.";
-            return false;
-        }
-
-        if (LooksLikePlainEnglishSentence(trimmed))
-        {
-            reason = "Generated content looks like prose, not source code.";
-            return false;
-        }
-
-        if (trimmed.Contains("Corrected the", StringComparison.OrdinalIgnoreCase)
-            || trimmed.Contains("for frontend interaction", StringComparison.OrdinalIgnoreCase))
-        {
-            reason = "Generated content appears to be explanatory text, not code.";
-            return false;
-        }
-
-        if (isOverwritingExistingFile && lineCount < 4)
-        {
-            reason = "Refused to overwrite existing file with very short output.";
-            return false;
-        }
-
-        if (extension == ".cs")
-        {
-            bool hasCSharpShape =
-                (trimmed.Contains("namespace ", StringComparison.Ordinal)
-                 || trimmed.Contains("class ", StringComparison.Ordinal)
-                 || trimmed.Contains("interface ", StringComparison.Ordinal))
-                && trimmed.Contains("{", StringComparison.Ordinal)
-                && trimmed.Contains("}", StringComparison.Ordinal);
-            if (!hasCSharpShape)
-            {
-                reason = "C# output missing expected type/namespace and block structure.";
-                return false;
-            }
-
-            if (!CodeExemplarContext.TryValidate(trimmed, out string syntaxReason))
-            {
-                reason = $"C# syntax check failed: {syntaxReason}";
-                return false;
-            }
-
-            if (!PlaceholderImplementationGuard.TryValidate(trimmed, out string placeholderReason))
-            {
-                reason = placeholderReason;
-                return false;
-            }
-
-            if (!ValidateDynamicLayerConventions(relativePath, trimmed, conventions, repoPath, out reason))
-            {
-                return false;
-            }
-
-            if (!InterfaceImplementationGuard.TryValidate(
-                    repoPath,
-                    relativePath,
-                    trimmed,
-                    interfaceDirectMembers,
-                    out reason))
-            {
-                return false;
-            }
-
-            if (!ValidateInterfaceCallParity(relativePath, trimmed, interfaceCatalog, out reason))
-            {
-                return false;
-            }
-
-            if (!ClassMemberAccessGuard.TryValidate(repoPath, relativePath, trimmed, out reason))
-            {
-                return false;
-            }
-
-            string fileName = Path.GetFileName(relativePath);
-            if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!TestBootstrapContext.TryValidateTestResolution(trimmed, repoPath, out string bootstrapReason))
-                {
-                    reason = bootstrapReason;
-                    return false;
-                }
-
-                if (!TestBootstrapContext.TryValidateTestLiteralTypes(trimmed, repoPath, out string literalReason))
-                {
-                    reason = literalReason;
-                    return false;
-                }
-
-                string? productionBase = TestCoverageAuditor.ExtractProductionBaseNameFromTestFileName(fileName);
-                if (!string.IsNullOrWhiteSpace(productionBase)
-                    && !TestBootstrapContext.TryValidateProductionMembers(
-                        repoPath,
-                        trimmed,
-                        productionBase,
-                        proposedDefinitions: null,
-                        out string productionMemberReason))
-                {
-                    reason = productionMemberReason;
-                    return false;
-                }
-            }
-        }
-        else if (extension is ".js" or ".ts" or ".tsx" or ".jsx")
-        {
-            bool hasScriptShape =
-                trimmed.Contains("function", StringComparison.Ordinal)
-                || trimmed.Contains("=>", StringComparison.Ordinal)
-                || trimmed.Contains("class ", StringComparison.Ordinal)
-                || trimmed.Contains("const ", StringComparison.Ordinal)
-                || trimmed.Contains("let ", StringComparison.Ordinal)
-                || trimmed.Contains("var ", StringComparison.Ordinal)
-                || trimmed.Contains("angular.", StringComparison.OrdinalIgnoreCase);
-            if (!hasScriptShape)
-            {
-                reason = "Script output missing expected function/class/module constructs.";
-                return false;
-            }
-        }
-        else if (extension == ".html")
-        {
-            if (!trimmed.Contains("<", StringComparison.Ordinal) || !trimmed.Contains(">", StringComparison.Ordinal))
-            {
-                reason = "HTML output missing markup tags.";
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool LooksLikePlainEnglishSentence(string content)
-    {
-        if (content.Contains("{", StringComparison.Ordinal)
-            || content.Contains("}", StringComparison.Ordinal)
-            || content.Contains(";", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return content.EndsWith(".", StringComparison.Ordinal)
-               && content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).Length <= 2;
-    }
-
-    private static bool ValidateDynamicLayerConventions(
-        string relativePath,
-        string content,
-        LayerConventionProfiles conventions,
-        string repoPath,
-        out string reason)
-    {
-        reason = string.Empty;
-        LayerConventionProfile? profile = conventions.ResolveByPath(relativePath);
-        if (profile is null || profile.SampleCount < 2)
-        {
-            return true;
-        }
-
-        string fileName = Path.GetFileName(relativePath);
-        string className = Path.GetFileNameWithoutExtension(fileName);
-        string role = profile.RoleName;
-        string entity = className.EndsWith(role, StringComparison.OrdinalIgnoreCase)
-            ? className[..^role.Length]
-            : className;
-
-        string? classLine = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-            .Select(line => line.Trim())
-            .FirstOrDefault(line => line.StartsWith("public class ", StringComparison.Ordinal));
-        if (string.IsNullOrWhiteSpace(classLine))
-        {
-            reason = $"Dynamic {role} contract failed for {fileName}: missing public class declaration.";
-            return false;
-        }
-
-        if (profile.RequireInheritanceClause && !classLine.Contains(":", StringComparison.Ordinal))
-        {
-            reason = $"Dynamic {role} contract failed for {fileName}: expected inheritance clause based on existing {role.ToLowerInvariant()} classes.";
-            return false;
-        }
-
-        if (profile.RequireMatchingRoleInterface)
-        {
-            string expectedInterface = $"I{entity}{role}";
-            if (!classLine.Contains(expectedInterface, StringComparison.Ordinal))
-            {
-                reason = $"Dynamic {role} contract failed for {fileName}: expected implementation of {expectedInterface}.";
-                return false;
-            }
-        }
-
-        foreach (var token in profile.RequiredInheritedTypeTokens)
-        {
-            if (!classLine.Contains(token, StringComparison.Ordinal))
-            {
-                reason = $"Dynamic {role} contract failed for {fileName}: missing inherited token '{token}' used by existing {role.ToLowerInvariant()} classes.";
-                return false;
-            }
-        }
-
-        if (profile.RequireBaseConstructorCall && !content.Contains("base(", StringComparison.Ordinal))
-        {
-            reason = $"Dynamic {role} contract failed for {fileName}: expected constructor base(...) call used by existing {role.ToLowerInvariant()} classes.";
-            return false;
-        }
-
-        if (!conventions.ValidateAgainstExemplar(
-                repoPath,
-                relativePath,
-                content,
-                Path.GetFileNameWithoutExtension(fileName),
-                profile,
-                out string exemplarReason))
-        {
-            reason = $"Dynamic {role} contract failed for {fileName}: {exemplarReason}";
-            return false;
-        }
-
-        string? ctorExemplarPath = LayerConventionProfiles.TryGetConstructorExemplarRelativePath(
-            repoPath,
-            entity,
-            profile,
-            relativePath);
-        foreach (var paramType in LayerConventionProfiles.ResolveRequiredConstructorParamTypes(
-                     repoPath,
-                     entity,
-                     profile,
-                     relativePath))
-        {
-            if (!content.Contains(paramType, StringComparison.Ordinal))
-            {
-                string exemplarHint = string.IsNullOrWhiteSpace(ctorExemplarPath)
-                    ? string.Empty
-                    : $" Mirror constructor dependencies from {ctorExemplarPath}.";
-                reason =
-                    $"Dynamic {role} contract failed for {fileName}: missing constructor dependency type '{paramType}'.{exemplarHint}";
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static List<GeneratedFile> OrderFilesForApply(IReadOnlyList<GeneratedFile> files) =>
-        files
-            .OrderBy(f => GetApplyPriority(f.RelativePath))
-            .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-    private static int GetApplyPriority(string relativePath)
-    {
-        string fileName = Path.GetFileName(relativePath);
-        if (fileName.StartsWith('I') && fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 0;
-        }
-
-        if (relativePath.Contains("/Entities/", StringComparison.OrdinalIgnoreCase)
-            || relativePath.Contains("/Models/", StringComparison.OrdinalIgnoreCase))
-        {
-            return 1;
-        }
-
-        if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 2;
-        }
-
-        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
-            && !fileName.StartsWith('I'))
-        {
-            return 4;
-        }
-
-        if (fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 5;
-        }
-
-        if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 6;
-        }
-
-        return 3;
-    }
-
-    private static bool ValidateInterfaceCallParity(
-        string relativePath,
-        string content,
-        InterfaceCatalog interfaceCatalog,
-        out string reason)
-    {
-        reason = string.Empty;
-        var fieldTypeMap = Regex.Matches(content, @"(?:private|public|protected)\s+(?:readonly\s+)?(I[A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
-            .ToDictionary(
-                m => m.Groups[2].Value,
-                m => m.Groups[1].Value,
-                StringComparer.Ordinal);
-
-        foreach (Match call in Regex.Matches(content, @"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\("))
-        {
-            string variable = call.Groups[1].Value;
-            string method = call.Groups[2].Value;
-            if (!fieldTypeMap.TryGetValue(variable, out string? iface))
-            {
-                continue;
-            }
-            if (!interfaceCatalog.TryGetMethods(iface, out var interfaceMethods))
-            {
-                continue;
-            }
-            if (!interfaceMethods.Contains(method))
-            {
-                string knownMembers = string.Join(", ", interfaceMethods.OrderBy(name => name, StringComparer.Ordinal).Take(12));
-                reason = $"Method call {variable}.{method}(...) is not defined on {iface}. Known members: {knownMembers}.";
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static InterfaceCatalog BuildInterfaceCatalog(string repoPath, IReadOnlyList<GeneratedFile> generatedFiles)
-    {
-        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-
-        foreach (var file in Directory.EnumerateFiles(repoPath, "I*.cs", SearchOption.AllDirectories))
-        {
-            if (file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                || file.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            AddInterfaceMethods(File.ReadAllText(file), map);
-        }
-
-        foreach (var generated in generatedFiles.Where(f => Path.GetFileName(f.RelativePath).StartsWith("I", StringComparison.OrdinalIgnoreCase)
-                                                         && f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
-        {
-            AddInterfaceMethods(generated.Content, map, overwrite: true, skipProtectedInterfaces: true);
-        }
-
-        PropagateInheritedRepositoryMethods(repoPath, generatedFiles, map);
-        return new InterfaceCatalog(map);
-    }
-
-    private static void PropagateInheritedRepositoryMethods(
-        string repoPath,
-        IReadOnlyList<GeneratedFile> generatedFiles,
-        Dictionary<string, HashSet<string>> map)
-    {
-        if (!map.TryGetValue("IRepository", out HashSet<string>? baseMethods) || baseMethods.Count == 0)
-        {
-            return;
-        }
-
-        void Apply(string content)
-        {
-            foreach (Match ifaceMatch in InterfaceDeclarationRegex.Matches(content))
-            {
-                string iface = ifaceMatch.Groups[1].Value;
-                string declaration = ExtractInterfaceDeclaration(content, ifaceMatch.Index);
-                if (!declaration.Contains("IRepository<", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!map.TryGetValue(iface, out HashSet<string>? methods))
-                {
-                    methods = new HashSet<string>(StringComparer.Ordinal);
-                    map[iface] = methods;
-                }
-
-                foreach (string method in baseMethods)
-                {
-                    methods.Add(method);
-                }
-            }
-        }
-
-        foreach (var file in Directory.EnumerateFiles(repoPath, "I*.cs", SearchOption.AllDirectories))
-        {
-            if (file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                || file.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            Apply(File.ReadAllText(file));
-        }
-
-        foreach (var generated in generatedFiles.Where(f => Path.GetFileName(f.RelativePath).StartsWith('I')
-                                                         && f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
-        {
-            Apply(generated.Content);
-        }
-    }
-
-    private static TypeNamespaceCatalog BuildTypeNamespaceCatalog(string repoPath, IReadOnlyList<GeneratedFile> generatedFiles)
-    {
-        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
-        {
-            if (file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                || file.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            AddTypesWithNamespace(File.ReadAllText(file), map);
-        }
-
-        foreach (var generated in generatedFiles.Where(f => f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
-        {
-            AddTypesWithNamespace(generated.Content, map);
-        }
-
-        return new TypeNamespaceCatalog(map);
-    }
-
-    private static void AddTypesWithNamespace(string content, Dictionary<string, HashSet<string>> map)
-    {
-        string? ns = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-            .Select(line => line.Trim())
-            .FirstOrDefault(line => line.StartsWith("namespace ", StringComparison.Ordinal))
-            ?.Substring("namespace ".Length)
-            .Trim();
-        if (string.IsNullOrWhiteSpace(ns))
-        {
-            return;
-        }
-
-        var declarations = Regex.Matches(content, @"\b(class|interface|record|struct)\s+([A-Za-z_][A-Za-z0-9_]*)")
-            .Select(match => match.Groups[2].Value)
-            .Distinct(StringComparer.Ordinal);
-        foreach (var type in declarations)
-        {
-            if (!map.TryGetValue(type, out var set))
-            {
-                set = new HashSet<string>(StringComparer.Ordinal);
-                map[type] = set;
-            }
-            set.Add(ns);
-        }
-    }
-
-    private static readonly Regex InterfaceDeclarationRegex = new(
-        @"\binterface\s+(I[A-Za-z0-9_]*)\b",
-        RegexOptions.Compiled);
-
-    private static void AddInterfaceMethods(
-        string content,
-        Dictionary<string, HashSet<string>> map,
-        bool overwrite = false,
-        bool skipProtectedInterfaces = false)
-    {
-        foreach (Match ifaceMatch in InterfaceDeclarationRegex.Matches(content))
-        {
-            string iface = ifaceMatch.Groups[1].Value;
-            if (skipProtectedInterfaces && PreExistingContractGuard.IsProtectedInterfaceName(iface))
-            {
-                continue;
-            }
-
-            if (overwrite || !map.ContainsKey(iface))
-            {
-                map[iface] = new HashSet<string>(StringComparer.Ordinal);
-            }
-
-            string declaration = ExtractInterfaceDeclaration(content, ifaceMatch.Index);
-            string body = ExtractInterfaceBody(content, ifaceMatch.Index);
-            foreach (Match methodMatch in Regex.Matches(body, @"^\s*(?:[\w<>\[\],\s\?]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*;", RegexOptions.Multiline))
-            {
-                map[iface].Add(methodMatch.Groups[1].Value);
-            }
-
-            foreach (Match methodMatch in Regex.Matches(body, @"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*;", RegexOptions.Multiline))
-            {
-                string methodName = methodMatch.Groups[1].Value;
-                if (methodName is not ("get" or "set"))
-                {
-                    map[iface].Add(methodName);
-                }
-            }
-
-            if (declaration.Contains("IRepository<", StringComparison.Ordinal)
-                && map.TryGetValue("IRepository", out HashSet<string>? repositoryMethods))
-            {
-                foreach (string method in repositoryMethods)
-                {
-                    map[iface].Add(method);
-                }
-            }
-        }
-    }
-
-    private static string ExtractInterfaceDeclaration(string content, int interfaceIndex)
-    {
-        int lineStart = content.LastIndexOf('\n', Math.Min(interfaceIndex, content.Length - 1));
-        lineStart = lineStart < 0 ? 0 : lineStart + 1;
-        int braceStart = content.IndexOf('{', interfaceIndex);
-        if (braceStart < 0)
-        {
-            return content[lineStart..];
-        }
-
-        return content[lineStart..braceStart];
-    }
-
-    private static string ExtractInterfaceBody(string content, int interfaceIndex)
-    {
-        int braceStart = content.IndexOf('{', interfaceIndex);
-        if (braceStart < 0)
-        {
-            return string.Empty;
-        }
-
-        int depth = 0;
-        for (int i = braceStart; i < content.Length; i++)
-        {
-            if (content[i] == '{')
-            {
-                depth++;
-            }
-            else if (content[i] == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    return content[braceStart..(i + 1)];
-                }
-            }
-        }
-
-        return content[braceStart..];
-    }
-
-}
-
-readonly record struct ApplyIssue(string RelativePath, string Reason);
-
-readonly record struct ApplyResult(
-    IReadOnlyList<string> AppliedFiles,
-    IReadOnlyList<ApplyIssue> RejectedFiles,
-    IReadOnlyList<AppliedFileChange> AppliedChanges);
-
-readonly record struct AppliedFileChange(
-    string RelativePath,
-    bool ExistedBeforeApply,
-    string? PreviousContent);
-
-sealed class InterfaceCatalog
-{
-    private readonly Dictionary<string, HashSet<string>> _methods;
-
-    public InterfaceCatalog(Dictionary<string, HashSet<string>> methods)
-    {
-        _methods = methods;
-    }
-
-    public bool TryGetMethods(string interfaceName, out HashSet<string> methods)
-    {
-        return _methods.TryGetValue(interfaceName, out methods!);
-    }
-}
-
-sealed class TypeNamespaceCatalog
-{
-    private readonly Dictionary<string, HashSet<string>> _namespacesByType;
-
-    public TypeNamespaceCatalog(Dictionary<string, HashSet<string>> namespacesByType)
-    {
-        _namespacesByType = namespacesByType;
-    }
-
-    public bool IsEmpty => _namespacesByType.Count == 0;
-
-    public bool TryGetUniqueNamespace(string typeName, out string? ns)
-    {
-        ns = null;
-        if (!_namespacesByType.TryGetValue(typeName, out var namespaces))
-        {
-            return false;
-        }
-
-        if (namespaces.Count != 1)
-        {
-            return false;
-        }
-
-        ns = namespaces.FirstOrDefault();
-        return !string.IsNullOrWhiteSpace(ns);
     }
 }

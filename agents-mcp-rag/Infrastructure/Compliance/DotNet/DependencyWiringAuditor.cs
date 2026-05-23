@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+using agents_mcp_rag.Infrastructure;
+
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 /// <summary>
 /// Detects DI registration gaps for workflow-introduced interfaces only.
@@ -148,10 +150,13 @@ internal static class DependencyWiringAuditor
         return applied;
     }
 
-    internal static string? BuildRegistrationContext(string repoPath)
+    internal static string? BuildRegistrationContext(
+        string repoPath,
+        RegistrationScopeConvention? registrationScope = null)
     {
+        registrationScope ??= RegistrationScopeDiscoverer.Discover(repoPath);
         var hubs = FindRegistrationHubFiles(repoPath, CollectRegisteredInterfaces(repoPath));
-        if (hubs.Count == 0)
+        if (hubs.Count == 0 && !registrationScope.IsDiscovered)
         {
             return null;
         }
@@ -167,7 +172,7 @@ internal static class DependencyWiringAuditor
             "- Each using directive must end with ';' only — never mix namespace braces into using lines."
         };
 
-        string? scopeContext = BootstrapRegistrationScope.BuildContext(repoPath);
+        string? scopeContext = BootstrapRegistrationScope.BuildContext(registrationScope);
         if (!string.IsNullOrWhiteSpace(scopeContext))
         {
             lines.Add(scopeContext);

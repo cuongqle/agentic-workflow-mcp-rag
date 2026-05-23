@@ -1,3 +1,4 @@
+using agents_mcp_rag.Infrastructure;
 using Microsoft.SemanticKernel;
 
 sealed class RecoveryAgent : LlmWorkflowAgentBase
@@ -16,7 +17,7 @@ sealed class RecoveryAgent : LlmWorkflowAgentBase
         string complianceIssues = state.ComplianceIssues.Count > 0
             ? string.Join("\n", state.ComplianceIssues.Select(i => $"- {i}"))
             : "- none";
-        string buildErrors = FormatBuildFindings(state.BuildValidation?.Findings);
+        string buildErrors = FormatBuildFindings(state);
         string contractSummary = state.Contract?.FormatStructureSummary() ?? "(contract not available)";
         if (contractSummary.Length > 3_000)
         {
@@ -70,18 +71,24 @@ IMPORTANT: Return strictly valid JSON with this shape:
 }}";
     }
 
-    private static string FormatBuildFindings(IReadOnlyList<AgentFinding>? findings)
+    private static string FormatBuildFindings(WorkflowState state)
     {
+        IReadOnlyList<AgentFinding>? findings = state.BuildValidation?.Findings;
         if (findings is null || findings.Count == 0)
         {
             return "- (no build findings)";
         }
 
+        RepoStack stack = RepoStack.From(state);
         var lines = new List<string>();
         foreach (var finding in findings)
         {
-            if (finding.Message.Contains("Build FAILED", StringComparison.OrdinalIgnoreCase)
-                || finding.Message.Contains("Build failed", StringComparison.OrdinalIgnoreCase))
+            if (stack.DotNet && BuildFailureClassifier.IsSummaryBanner(finding.Message))
+            {
+                continue;
+            }
+
+            if (!stack.DotNet && finding.Severity is not (FindingSeverity.High or FindingSeverity.Blocker))
             {
                 continue;
             }

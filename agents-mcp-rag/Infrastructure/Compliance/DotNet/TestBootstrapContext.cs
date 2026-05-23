@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+using agents_mcp_rag.Infrastructure;
+
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 /// <summary>
 /// Discovers test composition-root types from the repo and validates/normalizes how tests resolve dependencies.
@@ -54,7 +56,7 @@ internal static class TestBootstrapContext
         "TestInfrastructure"
     };
 
-    internal static string? BuildContext(string repoPath)
+    internal static string? BuildContext(string repoPath, RegistrationScopeConvention? registrationScope = null)
     {
         BootstrapInfo? bootstrap = DiscoverBootstrap(repoPath);
         if (bootstrap is null)
@@ -64,7 +66,8 @@ internal static class TestBootstrapContext
 
         var sb = new StringBuilder();
         sb.AppendLine("Test bootstrap resolution (use public API only — mirror exemplar Setup lines):");
-        string? diScope = BootstrapRegistrationScope.BuildContext(repoPath);
+        registrationScope ??= RegistrationScopeDiscoverer.Discover(repoPath);
+        string? diScope = BootstrapRegistrationScope.BuildContext(registrationScope);
         if (!string.IsNullOrWhiteSpace(diScope))
         {
             sb.AppendLine(diScope);

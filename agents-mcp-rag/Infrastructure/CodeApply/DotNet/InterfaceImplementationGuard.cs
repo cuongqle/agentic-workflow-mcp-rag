@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
 /// Ensures classes implement all members declared on implemented role interfaces (CS0535 prevention).
@@ -14,7 +14,7 @@ internal static class InterfaceImplementationGuard
         RegexOptions.Compiled);
 
     private static readonly Regex InterfaceDeclarationRegex = new(
-        @"\binterface\s+(I[A-Za-z0-9_]*)\b",
+        @"\binterface\s+([A-Za-z_][A-Za-z0-9_]*)\b",
         RegexOptions.Compiled);
 
     private static readonly Regex PublicMethodRegex = new(
@@ -64,7 +64,7 @@ internal static class InterfaceImplementationGuard
 
         Match classMatch = ClassDeclarationRegex.Match(content);
         string className = classMatch.Groups[1].Value;
-        var implementedInterfaces = ParseImplementedInterfaces(classMatch.Groups[2].Value);
+        var implementedInterfaces = ParseImplementedInterfaces(classMatch.Groups[2].Value, interfaceDirectMembers);
         if (implementedInterfaces.Count == 0)
         {
             return true;
@@ -100,7 +100,7 @@ internal static class InterfaceImplementationGuard
         IReadOnlyList<GeneratedFile> proposedFiles)
     {
         var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(repoPath, "I*.cs", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
         {
             if (file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
                 || file.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
@@ -112,8 +112,8 @@ internal static class InterfaceImplementationGuard
         }
 
         foreach (var generated in proposedFiles.Where(f =>
-                     Path.GetFileName(f.RelativePath).StartsWith('I')
-                     && f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
+                     f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                     && f.Content.Contains(" interface ", StringComparison.Ordinal)))
         {
             AddDirectInterfaceMembers(generated.Content, map, overwrite: true);
         }
@@ -177,11 +177,16 @@ internal static class InterfaceImplementationGuard
         return false;
     }
 
-    private static List<string> ParseImplementedInterfaces(string inheritanceClause) =>
+    private static List<string> ParseImplementedInterfaces(
+        string inheritanceClause,
+        IReadOnlyDictionary<string, HashSet<string>> interfaceDirectMembers) =>
         inheritanceClause
             .Split(',', StringSplitOptions.RemoveEmptyEntries)
-            .Select(token => token.Trim())
-            .Where(token => token.StartsWith('I') && token.Length > 1)
+            .Select(token => NormalizeTypeName(token.Trim()))
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .Where(token => interfaceDirectMembers.ContainsKey(token)
+                            || (token.StartsWith('I') && token.Length > 1)
+                            || token.EndsWith("Interface", StringComparison.Ordinal))
             .ToList();
 
     private static List<string> ParseBaseTypes(string inheritanceClause) =>
@@ -302,10 +307,11 @@ internal static class InterfaceImplementationGuard
                     continue;
                 }
 
-                string interfaceName = LayerConventionProfiles.BuildExpectedInterfaceFileName(subject, profile);
-                string? interfacePath = Directory
-                    .EnumerateFiles(repoPath, interfaceName, SearchOption.AllDirectories)
-                    .FirstOrDefault(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
+                string? interfacePath = LayerInterfacePairingDiscoverer.FindInterfaceFile(
+                    repoPath,
+                    profile.InterfacePairing,
+                    profile,
+                    subject);
                 if (string.IsNullOrWhiteSpace(interfacePath))
                 {
                     continue;
@@ -314,7 +320,11 @@ internal static class InterfaceImplementationGuard
                 string interfaceContent = File.ReadAllText(interfacePath);
                 var directMembers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
                 AddDirectInterfaceMembers(interfaceContent, directMembers);
-                string ifaceKey = Path.GetFileNameWithoutExtension(interfacePath);
+                string interfaceTypeName = profile.InterfacePairing.ResolveInterfaceTypeName(subject, profile);
+                string ifaceKey = !string.IsNullOrWhiteSpace(interfaceTypeName)
+                    && directMembers.ContainsKey(interfaceTypeName)
+                    ? interfaceTypeName
+                    : Path.GetFileNameWithoutExtension(interfacePath);
                 if (!directMembers.TryGetValue(ifaceKey, out HashSet<string>? members)
                     || members.Count == 0)
                 {

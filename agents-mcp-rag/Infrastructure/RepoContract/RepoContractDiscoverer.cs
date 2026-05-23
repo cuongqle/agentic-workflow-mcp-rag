@@ -43,7 +43,8 @@ internal static class RepoContractDiscoverer
             Entity = entityConvention,
             RepositoryInterfacesNamespace = repositoryInterfacesNamespace,
             ConsumerSuffixes = consumerSuffixes,
-            CompositionRootPaths = compositionRoots
+            CompositionRootPaths = compositionRoots,
+            RegistrationScope = RegistrationScopeDiscoverer.Discover(repoPath)
         };
     }
 

@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 internal enum BuildFailureScope
 {
@@ -24,6 +24,22 @@ internal readonly record struct BuildFailureAnalysis(
 
 internal static class BuildFailureClassifier
 {
+    /// <summary>dotnet build/msbuild summary lines — not actionable compiler diagnostics.</summary>
+    public static bool IsSummaryBanner(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+
+        return message.Contains("Build FAILED", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("Build failed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsActionableFinding(AgentFinding finding) =>
+        finding.Severity is FindingSeverity.High or FindingSeverity.Blocker
+        && !IsSummaryBanner(finding.Message);
+
     public static BuildFailureAnalysis Analyze(IReadOnlyList<AgentFinding> findings)
     {
         var production = new List<AgentFinding>();
@@ -41,15 +57,7 @@ internal static class BuildFailureClassifier
                     test.Add(finding);
                     break;
                 default:
-                    if (finding.Message.Contains("Build FAILED", StringComparison.OrdinalIgnoreCase)
-                        || finding.Message.Contains("Build failed", StringComparison.OrdinalIgnoreCase))
-                    {
-                        unscoped.Add(finding);
-                    }
-                    else
-                    {
-                        unscoped.Add(finding);
-                    }
+                    unscoped.Add(finding);
                     break;
             }
         }
@@ -58,8 +66,7 @@ internal static class BuildFailureClassifier
         {
             foreach (var finding in unscoped.ToList())
             {
-                if (finding.Message.Contains("Build FAILED", StringComparison.OrdinalIgnoreCase)
-                    || finding.Message.Contains("Build failed", StringComparison.OrdinalIgnoreCase))
+                if (IsSummaryBanner(finding.Message))
                 {
                     unscoped.Remove(finding);
                     test.Add(finding);

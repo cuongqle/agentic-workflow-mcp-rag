@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using agents_mcp_rag.Infrastructure;
 
-static class CompilationFixFileResolver
+static partial class CSharpCompilationFixSupport
 {
     public static IReadOnlyList<string> PrepareRecoveryPass(WorkflowState state)
     {

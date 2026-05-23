@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
 /// Validates instance member access (this.X, field.X) against declared and inherited members from base types in the repo.

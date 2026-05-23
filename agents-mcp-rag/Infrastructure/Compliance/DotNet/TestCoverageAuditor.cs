@@ -1,4 +1,4 @@
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 internal sealed record TestConvention(
     string TestDirectory,

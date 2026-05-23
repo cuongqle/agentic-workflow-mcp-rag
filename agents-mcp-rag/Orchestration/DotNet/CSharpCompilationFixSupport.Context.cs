@@ -2,9 +2,9 @@ using System.Text;
 using agents_mcp_rag.Configuration;
 using agents_mcp_rag.Infrastructure;
 
-static class CompilationFixContextBuilder
+static partial class CSharpCompilationFixSupport
 {
-    public static (string Context, IReadOnlyList<string> AttachedPaths, IReadOnlyList<string> OmittedPaths) Build(
+    public static (string Context, IReadOnlyList<string> AttachedPaths, IReadOnlyList<string> OmittedPaths) BuildContext(
         WorkflowState state,
         CompilationFixContextOptions? options = null)
     {
@@ -13,7 +13,7 @@ static class CompilationFixContextBuilder
         RepoContract contract = state.Contract ?? RepoContractDiscoverer.Discover(repoPath);
         var allowedPaths = state.CompilationFixAllowedFiles.Count > 0
             ? state.CompilationFixAllowedFiles
-            : CompilationFixFileResolver.DetermineAllowedFiles(state);
+            : CSharpCompilationFixSupport.DetermineAllowedFiles(state);
         var pathSet = new HashSet<string>(allowedPaths, StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<AgentFinding> buildFindings = state.BuildValidation is not null
             ? state.BuildValidation.Findings

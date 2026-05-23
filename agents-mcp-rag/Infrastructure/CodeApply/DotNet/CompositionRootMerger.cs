@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+using agents_mcp_rag.Infrastructure;
+
+namespace agents_mcp_rag.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
 /// Merges new DI registration lines into an existing test/app composition root without rewriting the file.

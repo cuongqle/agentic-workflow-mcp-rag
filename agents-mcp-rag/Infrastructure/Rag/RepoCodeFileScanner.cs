@@ -1,9 +1,16 @@
+namespace agents_mcp_rag.Infrastructure;
+
 static class RepoCodeFileScanner
 {
-    private static readonly HashSet<string> IncludedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> CommonExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".cs", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".scss",
-        ".json", ".csproj", ".sln", ".md"
+        ".js", ".ts", ".tsx", ".jsx", ".html", ".vue", ".css", ".scss",
+        ".json", ".md"
+    };
+
+    private static readonly HashSet<string> DotNetExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".csproj", ".sln"
     };
 
     private static readonly string[] ExcludedPathTokens =
@@ -20,20 +27,38 @@ static class RepoCodeFileScanner
         "/agents-mcp-rag-output/"
     };
 
-    public static IEnumerable<string> EnumerateRelevantFiles(string repoPath)
+    public static IEnumerable<string> EnumerateRelevantFiles(string repoPath, RepoContract? contract = null)
     {
         if (!Directory.Exists(repoPath))
         {
             return Enumerable.Empty<string>();
         }
 
+        var allowedExtensions = ResolveAllowedExtensions(contract);
+
         return Directory
             .EnumerateFiles(repoPath, "*.*", SearchOption.AllDirectories)
-            .Where(IsRelevantFile)
+            .Where(path => IsRelevantFile(path, allowedExtensions))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool IsRelevantFile(string absolutePath)
+    private static HashSet<string> ResolveAllowedExtensions(RepoContract? contract)
+    {
+        var allowed = new HashSet<string>(CommonExtensions, StringComparer.OrdinalIgnoreCase);
+
+        // No contract yet (early RAG build): include all known stack extensions.
+        if (contract is null)
+        {
+            allowed.UnionWith(DotNetExtensions);
+            return allowed;
+        }
+
+        contract.Stack.WhenDotNet(() => allowed.UnionWith(DotNetExtensions));
+
+        return allowed;
+    }
+
+    private static bool IsRelevantFile(string absolutePath, HashSet<string> allowedExtensions)
     {
         string normalized = absolutePath.Replace('\\', '/');
         if (ExcludedPathTokens.Any(token => normalized.Contains(token, StringComparison.OrdinalIgnoreCase)))
@@ -41,7 +66,7 @@ static class RepoCodeFileScanner
             return false;
         }
 
-        if (!IncludedExtensions.Contains(Path.GetExtension(absolutePath)))
+        if (!allowedExtensions.Contains(Path.GetExtension(absolutePath)))
         {
             return false;
         }

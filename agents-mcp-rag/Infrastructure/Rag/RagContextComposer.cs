@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using agents_mcp_rag.Infrastructure;
+
+namespace agents_mcp_rag.Infrastructure;
 
 static class RagContextComposer
 {
@@ -40,22 +41,20 @@ static class RagContextComposer
         var sb = new StringBuilder();
         sb.AppendLine("Legacy implementation exemplars (use these conventions):");
         sb.AppendLine(contract.FormatAgentPreamble(InferTargetEntityName(taskPrompt) ?? "NewEntity"));
-        AppendImplementationRules(sb);
+        AppendImplementationRules(sb, contract);
         sb.AppendLine();
 
         var signals = ExtractTaskSignals(taskPrompt);
-        string entityName = InferTargetEntityName(taskPrompt) ?? "NewEntity";
-        var candidateFiles = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath).ToList();
-        FrontendModuleTemplate? frontend = contract.Frontend;
+        var candidateFiles = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath, contract).ToList();
 
         AppendCorpusSummary(sb, candidateFiles, repoPath);
-        AppendSemanticContext(sb, ragIndex, taskPrompt);
+        AppendSemanticContext(sb, ragIndex, taskPrompt, contract);
 
         var ranked = candidateFiles
             .Select(path => new
             {
                 Path = path,
-                Score = ScoreFile(Path.GetRelativePath(repoPath, path).Replace('\\', '/'), signals, frontend)
+                Score = ScoreFile(Path.GetRelativePath(repoPath, path).Replace('\\', '/'), signals, contract)
             })
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Path.Length)
@@ -63,56 +62,22 @@ static class RagContextComposer
             .Select(x => x.Path)
             .ToList();
 
-        AppendCategory(sb, "WebAPI controllers", ranked, path => path.Contains("Controller", StringComparison.OrdinalIgnoreCase) && path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase), repoPath);
-        AppendCategory(sb, "Repository/entities/indexes", ranked, path =>
-            path.Contains("Repository", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Entities", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Index", StringComparison.OrdinalIgnoreCase), repoPath);
-        AppendCategory(sb, "Frontend UI modules", ranked, path => IsFrontendModulePath(path, contract), repoPath);
-        AppendCategory(sb, "Unit tests", ranked, path =>
-            path.Contains("UnitTest", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Tests", StringComparison.OrdinalIgnoreCase), repoPath);
-
-        CodeExemplarContext.AppendDiscoveredExemplars(sb, repoPath, taskPrompt);
-        string? wiringContext = DependencyWiringAuditor.BuildRegistrationContext(repoPath);
-        if (!string.IsNullOrWhiteSpace(wiringContext))
-        {
-            sb.AppendLine();
-            sb.AppendLine(wiringContext);
-        }
-
-        string? bootstrapContext = TestBootstrapContext.BuildContext(repoPath);
-        if (!string.IsNullOrWhiteSpace(bootstrapContext))
-        {
-            sb.AppendLine();
-            sb.AppendLine(bootstrapContext);
-        }
-
-        string? interfaceImplRules = InterfaceImplementationGuard.BuildRagContext(repoPath, taskPrompt);
-        if (!string.IsNullOrWhiteSpace(interfaceImplRules))
-        {
-            sb.AppendLine();
-            sb.AppendLine(interfaceImplRules);
-        }
-
-        string? typeMemberRules = TypeMemberConsistencyGuard.BuildRagContext(repoPath, taskPrompt);
-        if (!string.IsNullOrWhiteSpace(typeMemberRules))
-        {
-            sb.AppendLine();
-            sb.AppendLine(typeMemberRules);
-        }
+        RepoStack stack = contract.Stack;
+        stack.WhenDotNet(() =>
+            CSharpRagContextSupport.AppendImplementationContext(sb, repoPath, taskPrompt, contract, ranked));
+        stack.WhenFrontend(() =>
+            FrontendRagContextSupport.AppendImplementationContext(sb, ranked, contract, repoPath));
 
         return sb.ToString();
     }
 
-    private static void AppendImplementationRules(StringBuilder sb)
+    private static void AppendImplementationRules(StringBuilder sb, RepoContract contract)
     {
         sb.AppendLine();
         sb.AppendLine("Implementation rules (apply + compliance enforce these):");
         sb.AppendLine("- Mirror exemplar files in the sections below for the same layer (naming, inheritance, APIs).");
         sb.AppendLine("- Ship complete code: real method bodies; no stubs, TODO, or NotImplementedException.");
-        sb.AppendLine("- New role interfaces need full implementations; entity/index property names must match.");
-        sb.AppendLine("- Do not rewrite bootstrap/composition-root files or pre-existing store/base contracts.");
+        contract.Stack.WhenDotNet(() => CSharpRagContextSupport.AppendDotNetImplementationRules(sb));
     }
 
     private static void AppendCorpusSummary(StringBuilder sb, IReadOnlyList<string> files, string repoPath)
@@ -147,15 +112,18 @@ static class RagContextComposer
         }
     }
 
-    private static void AppendSemanticContext(StringBuilder sb, CodebaseRagIndex ragIndex, string taskPrompt)
+    private static void AppendSemanticContext(StringBuilder sb, CodebaseRagIndex ragIndex, string taskPrompt, RepoContract contract)
     {
         var semanticQueries = new List<string>
         {
             taskPrompt,
             "coding style naming patterns syntax conventions repository implementation examples",
-            "controller service model patterns validation and error handling",
             "unit tests integration tests mocking assertions conventions"
         };
+
+        RepoStack stack = contract.Stack;
+        semanticQueries.AddRange(stack.WhenDotNet(CSharpRagContextSupport.SemanticQueries()));
+        semanticQueries.AddRange(stack.WhenFrontend(FrontendRagContextSupport.SemanticQueries()));
 
         var seenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var collected = new List<(string Source, string Snippet)>();
@@ -205,49 +173,8 @@ static class RagContextComposer
         }
     }
 
-    private static void AppendCategory(StringBuilder sb, string title, IEnumerable<string> paths, Func<string, bool> predicate, string repoPath)
-    {
-        var selected = paths.Where(predicate).Take(3).ToList();
-        if (selected.Count == 0)
-        {
-            return;
-        }
-
-        sb.AppendLine();
-        sb.AppendLine($"{title}:");
-        foreach (var path in selected)
-        {
-            string relative = Path.GetRelativePath(repoPath, path).Replace('\\', '/');
-            sb.AppendLine($"- {relative}");
-            sb.AppendLine(ExtractSnippet(path));
-        }
-    }
-
-    private static string ExtractSnippet(string path)
-    {
-        try
-        {
-            int maxLines = 50;
-            int maxChars = 1200;
-            var lines = File.ReadLines(path).Take(maxLines).ToArray();
-            var snippet = string.Join('\n', lines);
-            if (snippet.Length > maxChars)
-            {
-                snippet = snippet[..maxChars];
-            }
-
-            return $"  Snippet:\n{Indent(snippet, "    ")}";
-        }
-        catch
-        {
-            return "  Snippet: <unavailable>";
-        }
-    }
-
-    private static string Indent(string text, string prefix)
-    {
-        return string.Join('\n', text.Split('\n').Select(line => $"{prefix}{line}"));
-    }
+    private static string Indent(string text, string prefix) =>
+        string.Join('\n', text.Split('\n').Select(line => $"{prefix}{line}"));
 
     private static List<string> ExtractTaskSignals(string taskPrompt)
     {
@@ -288,72 +215,20 @@ static class RagContextComposer
         return null;
     }
 
-    private static bool IsFrontendModulePath(string path, RepoContract contract)
-    {
-        string normalized = path.Replace('\\', '/');
-        if (normalized.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
-            || normalized.EndsWith(".vue", StringComparison.OrdinalIgnoreCase)
-            || normalized.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
-            || normalized.EndsWith(".ts", StringComparison.OrdinalIgnoreCase))
-        {
-            if (contract.Frontend is not null
-                && normalized.StartsWith(contract.Frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        if (contract.Frontend is null)
-        {
-            return normalized.Contains("/controllers/", StringComparison.OrdinalIgnoreCase)
-                   || normalized.Contains("/services/", StringComparison.OrdinalIgnoreCase)
-                   || normalized.Contains("/views/", StringComparison.OrdinalIgnoreCase)
-                   || normalized.Contains("/proxies/", StringComparison.OrdinalIgnoreCase);
-        }
-
-        if (!normalized.StartsWith(contract.Frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return contract.Frontend.RequiredSubfolders.Any(name =>
-                   normalized.Contains($"/{name}/", StringComparison.OrdinalIgnoreCase))
-               || contract.Frontend.AllowedRootFileNames.Any(name =>
-                   normalized.EndsWith("/" + name, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static int ScoreFile(string relativePath, IReadOnlyList<string> signals, FrontendModuleTemplate? frontend)
+    private static int ScoreFile(string relativePath, IReadOnlyList<string> signals, RepoContract contract)
     {
         string normalizedPath = relativePath.Replace('\\', '/');
         int score = ScoreFileCore(relativePath, signals);
 
-        if (frontend is null)
+        RepoStack stack = contract.Stack;
+        if (stack.DotNet)
         {
-            return score;
+            score += CSharpRagContextSupport.ScoreBackendPath(normalizedPath);
         }
 
-        if (normalizedPath.StartsWith(frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.StartsWith(frontend.WebProjectRoot + "/", StringComparison.OrdinalIgnoreCase))
+        if (stack.Frontend && contract.Frontend is not null)
         {
-            score += 40;
-        }
-
-        if (frontend.LayoutMode == FrontendLayoutMode.HostModulePages)
-        {
-            string hostPrefix = $"{frontend.ModulesRoot}/{frontend.ExemplarModuleName}/";
-            if (normalizedPath.StartsWith(hostPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 30;
-            }
-            else if (normalizedPath.StartsWith(frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                score -= 50;
-            }
-        }
-
-        if (frontend.ForbiddenRoots.Any(root => normalizedPath.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase)))
-        {
-            score -= 80;
+            score += FrontendRagContextSupport.ScoreFrontendPath(normalizedPath, contract.Frontend);
         }
 
         return score;
@@ -377,15 +252,6 @@ static class RagContextComposer
             }
         }
 
-        if (normalizedPath.Contains("Controller", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("Repository", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("Entities", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("Index", StringComparison.OrdinalIgnoreCase)) score += 6;
-        if (normalizedPath.Contains("UnitTest", StringComparison.OrdinalIgnoreCase) || normalizedPath.Contains("Tests", StringComparison.OrdinalIgnoreCase)) score += 10;
-        if (normalizedPath.Contains("/controllers/", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("/services/", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("/views/", StringComparison.OrdinalIgnoreCase)) score += 8;
-
         return score;
     }
 
@@ -398,12 +264,6 @@ static class RagContextComposer
 
         return content[..maxChars] + "\n\n[Context truncated to keep prompt focused.]";
     }
-
-    internal static string? DetectCanonicalDirectoryForFileSuffix(
-        string repoPath,
-        string fileSuffix,
-        string? preferredDirectoryName = null) =>
-        RepoContractDiscoverer.DetectCanonicalDirectoryForFileSuffix(repoPath, fileSuffix, preferredDirectoryName);
 }
 
 readonly record struct RagContextBundle(

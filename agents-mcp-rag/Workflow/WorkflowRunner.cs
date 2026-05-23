@@ -17,6 +17,7 @@ internal sealed class WorkflowRunner
         string repoPath = RepositoryResolver.Prepare(settings.RepoPath);
 
         Console.WriteLine("\n=== Step 2: Building Local RAG Pipeline ===");
+        RepoContract contract = RepoContractDiscoverer.Discover(repoPath);
         var ragOptions = new RagBuildOptions(
             settings.UseHybridRag,
             settings.OpenAIKey,
@@ -24,7 +25,7 @@ internal sealed class WorkflowRunner
             settings.RagLexicalWeight,
             settings.RagVectorWeight);
 
-        var ragIndex = await CodebaseRagIndex.BuildAsync(repoPath, ragOptions);
+        var ragIndex = await CodebaseRagIndex.BuildAsync(repoPath, ragOptions, contract);
         if (ragIndex.TotalFiles > 0)
         {
             Console.WriteLine($"RAG index build complete. Files: {ragIndex.TotalFiles}, chunks: {ragIndex.TotalChunks}");
@@ -36,7 +37,6 @@ internal sealed class WorkflowRunner
 
         Console.WriteLine("\n=== Step 4: Running Multi-Agent Development Workflow ===");
         string taskPrompt = args.Length > 0 ? string.Join(' ', args) : settings.DefaultTaskPrompt;
-        RepoContract contract = RepoContractDiscoverer.Discover(repoPath);
         RagContextBundle ragContext = await RagContextComposer.BuildAsync(repoPath, taskPrompt, ragIndex, contract);
 
         var workflowState = new WorkflowState

@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
 /// Ensures projection/consumer artifacts only reference members declared on a paired definition type.

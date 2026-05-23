@@ -29,6 +29,26 @@ static class WorkflowFindingRules
     public static bool HasUnresolvedApplyRejections(WorkflowState state) =>
         state.ComplianceIssues.Any(IsApplyRejectionComplianceIssue);
 
+    public static bool HasUnresolvedCompilationProblems(WorkflowState state) =>
+        HasActionableBuildFindings(state) || HasUnresolvedApplyRejections(state);
+
+    public static bool HasActionableBuildFindings(WorkflowState state)
+    {
+        if (state.BuildValidation?.Findings is not { Count: > 0 } findings)
+        {
+            return false;
+        }
+
+        RepoStack stack = RepoStack.From(state);
+        return stack.DotNet
+            ? findings.Any(BuildFailureClassifier.IsActionableFinding)
+            : findings.Any(IsGenericActionableBuildFinding);
+    }
+
+    private static bool IsGenericActionableBuildFinding(AgentFinding finding) =>
+        finding.Severity is FindingSeverity.High or FindingSeverity.Blocker
+        && !string.IsNullOrWhiteSpace(finding.Message);
+
     public static string FormatApplyRejectionComplianceIssue(string relativePath, string reason) =>
         $"Apply rejected '{relativePath}': {reason}";
 
@@ -57,24 +77,13 @@ static class WorkflowFindingRules
         return Regex.Replace(withoutCode, @"\n{3,}", "\n\n").Trim();
     }
 
+    public static RepoStack DetectRepoStack(WorkflowState state) =>
+        RepoStack.From(state);
+
     public static (bool HasBackend, bool HasFrontend) DetectRepoCapabilities(WorkflowState state)
     {
-        RepoContract? contract = state.Contract;
-        if (contract is not null)
-        {
-            bool hasFrontend = contract.Frontend is not null;
-            bool hasBackend = contract.LayerConventions.GetActiveProfiles().Any();
-            return (hasBackend, hasFrontend);
-        }
-
-        string structureContext = $"{state.ProjectStructureContext}\n{state.CombinedRagContext}";
-        bool hasFrontendFromRag = structureContext.Contains("Frontend host:", StringComparison.OrdinalIgnoreCase)
-                                  || structureContext.Contains("Feature modules root:", StringComparison.OrdinalIgnoreCase);
-        bool hasBackendFromRag = structureContext.Contains("Layer '", StringComparison.OrdinalIgnoreCase)
-                                 || structureContext.Contains("Entities:", StringComparison.OrdinalIgnoreCase)
-                                 || structureContext.Contains("Repository interfaces namespace:", StringComparison.OrdinalIgnoreCase);
-
-        return (hasBackendFromRag, hasFrontendFromRag);
+        RepoStack stack = DetectRepoStack(state);
+        return (stack.DotNet, stack.Frontend);
     }
 
     public static string FormatRepoCapabilities(WorkflowState state)

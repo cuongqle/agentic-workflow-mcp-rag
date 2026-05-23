@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
+
 static class LayerConventionProfileBuilder
 {
     private static readonly Regex RoleSuffixFromFileRegex = new(
@@ -110,9 +112,13 @@ static class LayerConventionProfileBuilder
         var inheritedTypeCount = new Dictionary<string, int>(StringComparer.Ordinal);
         var constructorParamTypeCount = new Dictionary<string, int>(StringComparer.Ordinal);
 
+        LayerConventionProfile discoveryProfile = CreateDiscoveryProfile(roleName, suffix);
+        LayerInterfacePairingConvention interfacePairing =
+            LayerInterfacePairingDiscoverer.Discover(repoPath, discoveryProfile);
+
         foreach (var file in files)
         {
-            var analyzed = AnalyzeClassFile(file, roleName);
+            var analyzed = AnalyzeClassFile(file, discoveryProfile, interfacePairing);
             if (analyzed is null)
             {
                 continue;
@@ -181,13 +187,31 @@ static class LayerConventionProfileBuilder
             SampleCount: sampleCount,
             CanonicalDirectory: canonicalDirectory,
             RequireInheritanceClause: (double)withInheritance / sampleCount >= strongThreshold,
-            RequireMatchingRoleInterface: (double)withMatchingInterface / sampleCount >= strongThreshold,
+            RequireMatchingRoleInterface: interfacePairing.LayerUsesInterfaces
+                                          && (double)withMatchingInterface / sampleCount >= strongThreshold,
             RequireBaseConstructorCall: (double)withBaseCtorCall / sampleCount >= strongThreshold,
             RequiredInheritedTypeTokens: requiredInheritedTypes,
-            RequiredConstructorParamTypes: requiredCtorParamTypes);
+            RequiredConstructorParamTypes: requiredCtorParamTypes,
+            InterfacePairing: interfacePairing);
     }
 
-    private static AnalyzedClassFile? AnalyzeClassFile(string filePath, string roleName)
+    private static LayerConventionProfile CreateDiscoveryProfile(string roleName, string suffix) =>
+        new(
+            RoleName: roleName,
+            FileSuffix: suffix,
+            SampleCount: 0,
+            CanonicalDirectory: null,
+            RequireInheritanceClause: false,
+            RequireMatchingRoleInterface: false,
+            RequireBaseConstructorCall: false,
+            RequiredInheritedTypeTokens: Array.Empty<string>(),
+            RequiredConstructorParamTypes: Array.Empty<string>(),
+            InterfacePairing: LayerInterfacePairingConvention.None);
+
+    private static AnalyzedClassFile? AnalyzeClassFile(
+        string filePath,
+        LayerConventionProfile profile,
+        LayerInterfacePairingConvention interfacePairing)
     {
         string[] lines = File.ReadAllLines(filePath);
         string content = string.Join('\n', lines);
@@ -212,12 +236,14 @@ static class LayerConventionProfileBuilder
                 .ToList();
         }
 
-        string entityName = className.EndsWith(roleName, StringComparison.OrdinalIgnoreCase)
-            ? className[..^roleName.Length]
-            : className;
-        string expectedRoleInterface = $"I{entityName}{roleName}";
-        bool hasMatchingRoleInterface = inheritedTypes.Any(type =>
-            type.Equals(expectedRoleInterface, StringComparison.Ordinal));
+        string? subjectBase = LayerConventionProfiles.GetSubjectBaseName(Path.GetFileName(filePath), profile);
+        string entityName = subjectBase
+                              ?? (className.EndsWith(profile.RoleName, StringComparison.OrdinalIgnoreCase)
+                                  ? className[..^profile.RoleName.Length]
+                                  : className);
+        string expectedRoleInterface = interfacePairing.ResolveInterfaceTypeName(entityName, profile);
+        bool hasMatchingRoleInterface = !string.IsNullOrWhiteSpace(expectedRoleInterface)
+                                          && inheritedTypes.Any(type => TypeNamesMatch(type, expectedRoleInterface));
         bool hasBaseCtorCall = content.Contains("base(", StringComparison.Ordinal);
 
         var ctorParamTypes = new HashSet<string>(StringComparer.Ordinal);
@@ -251,6 +277,16 @@ static class LayerConventionProfileBuilder
             hasMatchingRoleInterface,
             hasBaseCtorCall,
             ctorParamTypes.ToList());
+    }
+
+    private static bool TypeNamesMatch(string actual, string expected) =>
+        actual.Equals(expected, StringComparison.Ordinal)
+        || StripGenericArity(actual).Equals(StripGenericArity(expected), StringComparison.Ordinal);
+
+    private static string StripGenericArity(string typeName)
+    {
+        int generic = typeName.IndexOf('<');
+        return generic > 0 ? typeName[..generic] : typeName;
     }
 
     private sealed record AnalyzedClassFile(
@@ -322,7 +358,7 @@ sealed class LayerConventionProfiles
     }
 
     internal static string BuildExpectedInterfaceFileName(string subjectBase, LayerConventionProfile profile) =>
-        $"I{subjectBase}{profile.RoleName}.cs";
+        profile.InterfacePairing.ResolveInterfaceFileName(subjectBase, profile);
 
     internal static string BuildExpectedImplementationFileName(string subjectBase, LayerConventionProfile profile) =>
         $"{subjectBase}{profile.RoleName}.cs";
@@ -335,9 +371,13 @@ sealed class LayerConventionProfiles
     {
         var required = new HashSet<string>(StringComparer.Ordinal);
 
-        if (profile.RequireMatchingRoleInterface)
+        if (profile.InterfacePairing.LayerUsesInterfaces || profile.RequireMatchingRoleInterface)
         {
-            required.Add($"I{subjectBase}{profile.RoleName}");
+            string interfaceTypeName = profile.InterfacePairing.ResolveInterfaceTypeName(subjectBase, profile);
+            if (!string.IsNullOrWhiteSpace(interfaceTypeName))
+            {
+                required.Add(interfaceTypeName);
+            }
         }
 
         LayerExemplarConstructor? exemplar = FindExemplarConstructor(
@@ -513,4 +553,5 @@ sealed record LayerConventionProfile(
     bool RequireMatchingRoleInterface,
     bool RequireBaseConstructorCall,
     IReadOnlyList<string> RequiredInheritedTypeTokens,
-    IReadOnlyList<string> RequiredConstructorParamTypes);
+    IReadOnlyList<string> RequiredConstructorParamTypes,
+    LayerInterfacePairingConvention InterfacePairing);

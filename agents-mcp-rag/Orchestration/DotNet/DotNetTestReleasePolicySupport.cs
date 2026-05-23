@@ -1,18 +1,21 @@
 using agents_mcp_rag.Infrastructure;
 
-sealed partial class WorkflowOrchestrator
+/// <summary>
+/// DotNet test quarantine and release policy — production passes but test projects fail.
+/// </summary>
+static class DotNetTestReleasePolicySupport
 {
-    private static bool ShouldAttemptTestQuarantine(WorkflowState state)
-    {
-        return state.BuildValidation is not null
-               && state.BuildValidation.ProductionBuildPassed == true
-               && state.BuildValidation.Findings.Count > 0
-               && BuildFailureClassifier.IsOnlyTestFailures(state.BuildValidation.Findings);
-    }
+    public static bool ShouldAttemptQuarantine(WorkflowState state) =>
+        state.BuildValidation is not null
+        && state.BuildValidation.ProductionBuildPassed == true
+        && state.BuildValidation.Findings.Count > 0
+        && BuildFailureClassifier.IsOnlyTestFailures(state.BuildValidation.Findings);
 
-    private async Task<bool> TryQuarantineTestArtifactsAsync(
+    public static async Task<bool> TryQuarantineAsync(
         WorkflowState state,
         Dictionary<string, AppliedFileChange> rollbackChanges,
+        Func<WorkflowState, CancellationToken, Task<AgentResult>> revalidateBuildAsync,
+        Func<string, Task> publishStatusAsync,
         CancellationToken cancellationToken)
     {
         var testChanges = rollbackChanges.Values
@@ -27,26 +30,13 @@ sealed partial class WorkflowOrchestrator
         foreach (var change in testChanges)
         {
             rollbackChanges.Remove(change.RelativePath);
-            string fileName = Path.GetFileName(change.RelativePath);
-            if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
-            {
-                string subjectBaseName = Path.GetFileNameWithoutExtension(fileName);
-                if (subjectBaseName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase))
-                {
-                    subjectBaseName = subjectBaseName[..^"Tests".Length];
-                }
-
-                if (!string.IsNullOrWhiteSpace(subjectBaseName))
-                {
-                    state.DeferredTestEntities.Add(subjectBaseName);
-                }
-            }
+            RecordDeferredTestEntity(state, change.RelativePath);
         }
 
         state.AddTimeline($"Quarantined {testChanges.Count} test artifact(s) with unresolved compile errors.");
-        await _mcpAdapter.PublishStatusAsync($"Quarantined {testChanges.Count} failing test artifact(s); production code retained.");
+        await publishStatusAsync($"Quarantined {testChanges.Count} failing test artifact(s); production code retained.");
 
-        state.BuildValidation = await _buildValidationAgent.ExecuteAsync(state, cancellationToken);
+        state.BuildValidation = await revalidateBuildAsync(state, cancellationToken);
         if (state.BuildValidation.Findings.Count > 0)
         {
             foreach (var finding in state.BuildValidation.Findings)
@@ -62,28 +52,7 @@ sealed partial class WorkflowOrchestrator
         return true;
     }
 
-    private static void RefreshAutomatedComplianceAuditFindings(
-        WorkflowState state,
-        List<AgentFinding> llmOutputQualityFindings)
-    {
-        if (state.Audit is null)
-        {
-            return;
-        }
-
-        state.Audit.Findings.Clear();
-        var refreshedFindings = ContractComplianceValidator.CollectComplianceFindings(state);
-        refreshedFindings.AddRange(llmOutputQualityFindings);
-        state.Audit.Findings.AddRange(refreshedFindings);
-        if (state.BuildValidation is not null)
-        {
-            state.Audit.Findings.AddRange(state.BuildValidation.Findings);
-        }
-
-        ApplyTestFailureReleasePolicy(state);
-    }
-
-    private static void ApplyTestFailureReleasePolicy(WorkflowState state)
+    public static void ApplyReleasePolicy(WorkflowState state)
     {
         if (state.Audit is null || state.BuildValidation?.ProductionBuildPassed != true)
         {
@@ -132,6 +101,26 @@ sealed partial class WorkflowOrchestrator
                     Message = deferredMessage
                 });
             }
+        }
+    }
+
+    private static void RecordDeferredTestEntity(WorkflowState state, string relativePath)
+    {
+        string fileName = Path.GetFileName(relativePath);
+        if (!fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string subjectBaseName = Path.GetFileNameWithoutExtension(fileName);
+        if (subjectBaseName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase))
+        {
+            subjectBaseName = subjectBaseName[..^"Tests".Length];
+        }
+
+        if (!string.IsNullOrWhiteSpace(subjectBaseName))
+        {
+            state.DeferredTestEntities.Add(subjectBaseName);
         }
     }
 }

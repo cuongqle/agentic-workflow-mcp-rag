@@ -2,36 +2,91 @@ using agents_mcp_rag.Infrastructure;
 
 sealed partial class WorkflowOrchestrator
 {
-    private void PrepareRecoveryContext(WorkflowState state, string timelineLabel)
+    private async Task RunCompilationFixLoopAsync(
+        WorkflowState state,
+        Dictionary<string, AppliedFileChange> rollbackChanges,
+        CancellationToken cancellationToken)
     {
-        foreach (string entry in CompilationFixFileResolver.PrepareRecoveryPass(state))
+        int attempt = 0;
+        while (state.BuildValidation is not null
+               && attempt < _maxCompilationFixAttempts
+               && WorkflowFindingRules.HasUnresolvedCompilationProblems(state))
         {
-            state.AddTimeline(entry);
+            attempt++;
+            state.Stage = WorkflowStage.Integrating;
+
+            PrepareRecoveryContext(state, "Compilation fix");
+
+            state.AddTimeline($"Compilation fix attempt {attempt} started (LLM recovery).");
+            await _mcpAdapter.PublishStatusAsync($"Compilation fix attempt {attempt} started.");
+
+            state.Recovery = await _recoveryAgent.ExecuteAsync(state, cancellationToken);
+            state.AddTimeline($"Compilation fix attempt {attempt} output generated.");
+
+            var applyResult = await GeneratedFileApplier.ApplyAsync(state);
+            if (applyResult.AppliedFiles.Count > 0)
+            {
+                state.AddTimeline($"Compilation fix applied files: {string.Join(", ", applyResult.AppliedFiles)}");
+                RollbackTracker.CaptureRollbackChanges(rollbackChanges, applyResult.AppliedChanges);
+            }
+            else
+            {
+                state.AddTimeline("Compilation fix produced no applicable file changes.");
+            }
+
+            state.ComplianceIssues.RemoveAll(WorkflowFindingRules.IsApplyRejectionComplianceIssue);
+            foreach (var rejected in applyResult.RejectedFiles)
+            {
+                string issue = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
+                    rejected.RelativePath,
+                    rejected.Reason);
+                state.AddTimeline(issue);
+                state.ComplianceIssues.Add(issue);
+            }
+
+            RecordNuGetPackageChanges(state);
+
+            state.BuildValidation = await _buildValidationAgent.ExecuteAsync(state, cancellationToken);
+            if (!WorkflowFindingRules.HasActionableBuildFindings(state))
+            {
+                state.AddTimeline($"Build passed after compilation fix attempt {attempt}.");
+                await _mcpAdapter.PublishStatusAsync($"Build passed after compilation fix attempt {attempt}.");
+                break;
+            }
+
+            foreach (var finding in state.BuildValidation.Findings)
+            {
+                state.AddTimeline($"Build finding after compilation fix {attempt}: [{finding.Severity}] {finding.Message}");
+            }
+            await _mcpAdapter.PublishStatusAsync($"Build still failing after compilation fix attempt {attempt}.");
         }
 
-        state.CompilationFixAllowedFiles = CompilationFixFileResolver.DetermineAllowedFiles(state);
-        var (exemplarContext, attachedPaths, omittedPaths) =
-            CompilationFixContextBuilder.Build(state, _compilationFixContextOptions);
-        state.CompilationFixExemplarContext = exemplarContext;
-        if (attachedPaths.Count > 0)
+        if (TestReleasePolicySupport.ShouldAttemptQuarantine(state))
         {
-            state.AddTimeline(
-                $"{timelineLabel}: inlined {attachedPaths.Count} full source file(s): {string.Join(", ", attachedPaths)}");
+            await TestReleasePolicySupport.TryQuarantineAsync(
+                state,
+                rollbackChanges,
+                _buildValidationAgent.ExecuteAsync,
+                _mcpAdapter.PublishStatusAsync,
+                cancellationToken);
+            TestReleasePolicySupport.ApplyReleasePolicy(state);
         }
-
-        if (omittedPaths.Count > 0)
-        {
-            state.AddTimeline(
-                $"{timelineLabel}: {omittedPaths.Count} lower-priority path(s) not inlined "
-                + $"(raise Workflow.CompilationFixMaxContextChars or set to 0 for unlimited): "
-                + $"{string.Join(", ", omittedPaths.Take(12))}"
-                + (omittedPaths.Count > 12 ? ", ..." : string.Empty));
-        }
-
     }
+
+    private void PrepareRecoveryContext(WorkflowState state, string timelineLabel) =>
+        RecoveryContextSupport.Prepare(
+            state,
+            timelineLabel,
+            _compilationFixContextOptions,
+            state.AddTimeline);
 
     private static void RecordNuGetPackageChanges(WorkflowState state)
     {
+        if (state.Contract is { Stack.DotNet: false })
+        {
+            return;
+        }
+
         foreach (string packageChange in ProjectPackageAuditor.EnsureMissingPackages(
                      state.RepoPath,
                      state.BuildValidation?.Findings,

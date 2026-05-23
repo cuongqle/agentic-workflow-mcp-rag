@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 /// <summary>
 /// Clones an existing *Tests.cs exemplar for any discovered production layer (repository, service, controller, …).

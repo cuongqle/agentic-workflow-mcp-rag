@@ -2,27 +2,68 @@
 
 Multi-agent development workflow for a **target repository**. It uses **Semantic Kernel** (OpenAI), **local hybrid RAG** (lexical + embeddings), and the **GitHub MCP server** to plan, generate, validate, audit, recover, and optionally open a pull request—all while following patterns discovered in the existing codebase.
 
+The orchestrator is **stack-aware**: it discovers repo capabilities once, then routes apply, RAG, compliance, build validation, recovery, and test-release policy through thin generic facades into **DotNet** or **Frontend** support code.
+
 ## What it does
 
 Given a task (e.g. “add a Timesheet entity like Employee”), the system:
 
-1. Indexes and retrieves relevant code from the target repo.
-2. Plans architecture, then generates backend and frontend files in parallel.
-3. Applies changes with safety gates (syntax, layer conventions, interface parity).
-4. Runs deterministic compliance checks and `dotnet build`.
-5. Audits output and recovers from failures in a loop.
-6. Separates **production** vs **test** build failures so bad unit tests do not roll back good production code.
-7. Writes workflow artifacts and optionally creates a GitHub PR via MCP.
+1. Discovers **RepoContract** (layers, frontend layout, DI scope, composition roots) and derives **RepoStack** flags.
+2. Indexes and retrieves relevant code from the target repo (extensions and exemplars gated by stack).
+3. Plans architecture, then generates backend and/or frontend files in parallel (scope from architecture + contract).
+4. Applies changes with stack-aware safety gates (C# guards only when `stack.DotNet`).
+5. Runs deterministic compliance rules selected by stack (`ComplianceRuleRegistry.For(stack)`).
+6. Validates builds per stack (`.NET`: `dotnet build` / `dotnet test`; frontend: `npm run build`).
+7. Audits output and recovers from failures in a loop.
+8. For .NET repos: separates **production** vs **test** build failures so bad unit tests do not roll back good production code.
+9. Writes workflow artifacts and optionally creates a GitHub PR via MCP.
+
+---
+
+## Stack-aware architecture
+
+Discovery happens **once** at bootstrap. Every downstream subsystem reads the same snapshot instead of re-checking `HasDotNetBackend` / `HasFrontend` inline.
+
+```
+RepoContractDiscoverer.Discover(repoPath)
+  └── RepoContract
+        ├── HasDotNetBackend   (DI scope, composition roots, layer conventions)
+        ├── HasFrontend        (frontend module template discovered)
+        └── .Stack → RepoStack(DotNet, Frontend)
+
+RepoStack routes at orchestration boundaries:
+  ├── ApplyContext / GeneratedFileApplier     → CodeApply/DotNet/*
+  ├── RagContextComposer                      → Rag/DotNet/* + FrontendRagContextSupport
+  ├── ComplianceRuleRegistry.For(stack)       → DotNetComplianceRules + FrontendComplianceRules
+  ├── BuildValidationAgent                    → BuildValidation/DotNet/* + FrontendBuildValidationSupport
+  ├── RecoveryContextSupport                  → Orchestration/DotNet/CSharpCompilationFixSupport
+  └── TestReleasePolicySupport                → Orchestration/DotNet/DotNetTestReleasePolicySupport
+```
+
+| Layer | Generic (parent) | DotNet (`*/DotNet/`) | Frontend (parent or `Frontend*`) |
+|-------|------------------|----------------------|----------------------------------|
+| Apply | `ApplyContext`, `GeneratedFileApplier` | `CSharpApplySupport`, guards, DI merge | extension checks in applier |
+| RAG | `RagContextComposer`, `RepoCodeFileScanner` | `CSharpRagContextSupport` | `FrontendRagContextSupport` |
+| Compliance | `ComplianceRuleRegistry`, `ComplianceContext` | `DotNetComplianceRules`, auditors | `FrontendComplianceRules` |
+| Build | `BuildValidationAgent` | `DotNetBuildValidationSupport` | `FrontendBuildValidationSupport` |
+| Recovery | `RecoveryContextSupport`, `WorkflowFindingRules` | `CSharpCompilationFixSupport` | proposed-files-only fallback |
+| Test release | `TestReleasePolicySupport` | `DotNetTestReleasePolicySupport` | no-op (extensible) |
+
+**Convention:** stack-specific logic lives under `DotNet/` subfolders (namespaces `*.DotNet`). Generic orchestrators stay at the parent level and call `stack.WhenDotNet(...)` / `stack.WhenFrontend(...)`.
+
+---
 
 ## Prerequisites
 
 | Requirement | Purpose |
 |-------------|---------|
 | [.NET 8 SDK](https://dotnet.microsoft.com/download) | Build and run the app |
-| [Node.js](https://nodejs.org/) + `npx` | GitHub MCP server (`@modelcontextprotocol/server-github`) |
+| [Node.js](https://nodejs.org/) + `npx` | GitHub MCP server; frontend `npm run build` validation |
 | OpenAI API key | Chat + embeddings (hybrid RAG) |
 | GitHub PAT | MCP GitHub tools (PR/status) |
 | Local path or Git URL | Target repo to modify |
+
+---
 
 ## Quick start
 
@@ -94,40 +135,45 @@ flowchart TB
         A[Load appsettings] --> B[Semantic Kernel + OpenAI]
         B --> C[GitHub MCP via npx]
         C --> D[Resolve target repo]
-        D --> E[Build hybrid RAG index]
-        E --> F[Compose RAG context]
+        D --> E[RepoContractDiscoverer]
+        E --> F[Build hybrid RAG index]
+        F --> G[RagContextComposer]
     end
 
     subgraph orchestrator [WorkflowOrchestrator]
-        F --> G[ArchitectureAgent]
-        G --> H[BackendDeveloperAgent]
-        G --> I[FrontendDeveloperAgent]
-        H --> J[GeneratedFileApplier]
-        I --> J
-        J --> K[Compliance checks]
-        K --> L{Blocking compliance?}
-        L -->|yes| M[Compilation fix loop]
-        L -->|no| N[BuildValidationAgent]
-        M --> N
-        N --> O{Build errors?}
-        O -->|yes| M
-        O -->|no| P[ObserverAgent]
-        P --> Q[AuditorAgent]
-        Q --> R{Blocking audit?}
-        R -->|yes| S[Recovery loop]
-        S --> T[Apply + NuGet + re-build + re-audit]
-        T --> R
-        R -->|no| U[Test quarantine policy]
-        U --> V{Still blocked?}
-        V -->|production fail| W[Rollback all changes]
-        V -->|test-only / ok| X[Ready for PR]
-        W --> Y[Blocked]
-        X --> Z[Artifacts + optional GitHub PR]
-        Z --> AA[Done]
+        G --> H[ArchitectureAgent]
+        H --> I{ResolveImplementationScope}
+        I --> J[BackendDeveloperAgent]
+        I --> K[FrontendDeveloperAgent]
+        J --> L[GeneratedFileApplier]
+        K --> L
+        L --> M[ComplianceRuleRegistry.For stack]
+        M --> N{Blocking compliance?}
+        N -->|yes| O[Recovery loop]
+        N -->|no| P[BuildValidationAgent]
+        O --> P
+        P --> Q{HasUnresolvedCompilationProblems?}
+        Q -->|yes| O
+        Q -->|no| R[ObserverAgent]
+        R --> S[AuditorAgent]
+        S --> T{Blocking audit?}
+        T -->|yes| U[Recovery loop + re-audit]
+        U --> T
+        T -->|no| V[TestReleasePolicySupport]
+        V --> W{Still blocked?}
+        W -->|production fail| X[Rollback all changes]
+        W -->|test-only / ok| Y[Ready for PR]
+        X --> Z[Blocked]
+        Y --> AA[Artifacts + optional GitHub PR]
+        AA --> AB[Done]
     end
 ```
 
-**Compilation fix loop** and **recovery loop** both run: `PrepareRecoveryContext` → `RecoveryAgent` → `GeneratedFileApplier` → `RecordNuGetPackageChanges` → `BuildValidationAgent` (repeat until pass or max attempts).
+**Recovery loop** (compilation fix + auditor recovery) shares the same path:
+
+`RecoveryContextSupport.Prepare` → `RecoveryAgent` → `GeneratedFileApplier` → `RecordNuGetPackageChanges` (DotNet only) → `BuildValidationAgent` → repeat until pass or max attempts.
+
+Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilationProblems` — stack-aware actionable build findings plus unresolved apply rejections (not raw finding count).
 
 ### Stage-by-stage
 
@@ -137,21 +183,21 @@ flowchart TB
 | **2** | `KernelFactory` | Creates Semantic Kernel with OpenAI chat completion. |
 | **3** | `GitHubMcpClientFactory` | Starts `@modelcontextprotocol/server-github` over stdio. |
 | **4** | `RepositoryResolver` | Uses local repo or clone/pull remote URL into cache. |
-| **5** | `CodebaseRagIndex` | Scans code files; builds lexical + vector (OpenAI embeddings) index. |
-| **6** | `RagContextComposer` | Structure profile, legacy patterns, retrieval for task, expected paths. |
-| **7** | `ArchitectureAgent` | Plan: rationale, backend/frontend tasks, test strategy. |
-| **8** | `BackendDeveloperAgent` / `FrontendDeveloperAgent` | Parallel JSON file generation (paths + full content). |
-| **9** | `GeneratedFileApplier` | Canonical paths, duplicate prevention, C# guards, writes files. |
-| **10** | Compliance (deterministic) | `RepoContract` + path conventions, entity/layer guards, missing unit tests. |
-| **11** | Compilation fix loop | `PrepareRecoveryContext` → `RecoveryAgent` → apply → NuGet restore → rebuild (up to `MaxCompilationFixAttempts`). |
-| **12** | `BuildValidationAgent` | Full solution build + per-project production build. |
-| **13** | `ObserverAgent` | Integration / cross-cutting review. |
-| **14** | `AuditorAgent` | LLM audit + merged compliance/build findings. |
-| **15** | Recovery loop | Same context prep as compilation fix; up to `MaxRecoveryAttempts`. |
-| **16** | Test release policy | Quarantine failing test artifacts; keep production changes. |
-| **17** | Final gate | Rollback only on **production** build failure; else PR path. |
-| **18** | `WorkflowArtifactWriter` | Persists timeline and summaries. |
-| **19** | `GitHubMcpAdapter` | Optional PR creation on target repo. |
+| **5** | `RepoContractDiscoverer` | Discovers layout, layers, frontend template → `WorkflowState.Contract`. |
+| **6** | `CodebaseRagIndex` | Scans stack-relevant extensions; builds lexical + vector index. |
+| **7** | `RagContextComposer` | Structure + stack-specific exemplars + semantic retrieval → `CombinedRagContext`. |
+| **8** | `ArchitectureAgent` | Plan: rationale, backend/frontend tasks, test strategy. |
+| **9** | `BackendDeveloperAgent` / `FrontendDeveloperAgent` | Parallel JSON file generation (gated by `ResolveImplementationScope`). |
+| **10** | `GeneratedFileApplier` | Canonical paths, C# guards when `stack.DotNet`, writes files. |
+| **11** | `ComplianceRuleRegistry.For(stack)` | Shared + Frontend + DotNet rules → `ContractComplianceValidator`. |
+| **12** | Recovery loop | Up to `MaxCompilationFixAttempts`; context from `RecoveryContextSupport`. |
+| **13** | `BuildValidationAgent` | Routes to DotNet and/or Frontend validators; merges results. |
+| **14** | `ObserverAgent` | Integration / cross-cutting review. |
+| **15** | `AuditorAgent` | LLM audit + merged compliance/build findings. |
+| **16** | Recovery loop | Up to `MaxRecoveryAttempts`; same recovery path as step 12. |
+| **17** | `TestReleasePolicySupport` | DotNet: quarantine failing test artifacts, downgrade test-only audit findings. |
+| **18** | Final gate | Rollback only on **production** build failure; else PR path. |
+| **19** | Artifacts + `GitHubMcpAdapter` | Timeline, summaries, optional PR. |
 
 ### Workflow stages (`WorkflowStage`)
 
@@ -171,109 +217,138 @@ Queued → Planning → Implementing → Integrating → Auditing
 | **ArchitectureAgent** | High-level plan and task breakdown. |
 | **BackendDeveloperAgent** | C# / API / repository / entity / test files (JSON output). |
 | **FrontendDeveloperAgent** | JS/TS/HTML/Angular-style files (JSON output). |
-| **BuildValidationAgent** | `dotnet build` on solution + non-test projects (`ProductionBuildPassed`). |
+| **BuildValidationAgent** | Stack router: DotNet (`dotnet build` / `dotnet test`) and/or Frontend (`npm run build`). |
 | **ObserverAgent** | Post-build integration observation. |
 | **AuditorAgent** | Release-readiness review; merges with deterministic findings. |
-| **RecoveryAgent** | Fixes build/apply failures using full exemplar sources + contract (not RAG snippets). |
+| **RecoveryAgent** | Fixes build/apply failures using exemplar sources + contract (stack-aware error formatting). |
 
-Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** uses `CompilationFixExemplarContext` and `CompilationFixAllowedFiles` prepared by the orchestrator.
+Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** uses `CompilationFixExemplarContext` and `CompilationFixAllowedFiles` prepared by `RecoveryContextSupport`.
 
 ---
 
-## Repository contract (discovered once per run)
+## Repository contract and stack flags
 
 `RepoContractDiscoverer` scans the target repo at startup and stores layout on `WorkflowState.Contract`:
 
-- Layer conventions (repository, service, controller, …) with exemplar paths
-- Entity conventions (`IEntity`, canonical directory)
-- Frontend layout mode (e.g. host-module pages vs sibling feature modules)
+| Signal | Property | Used for |
+|--------|----------|----------|
+| Layer conventions, DI scope, composition roots | `HasDotNetBackend` | C# apply guards, DotNet compliance, `dotnet` build, recovery context |
+| Frontend module template | `HasFrontend` | Frontend RAG, path rules, `npm run build` |
+| Both | `Contract.Stack` | Single routing snapshot via `RepoStack.From(contract)` |
 
 Agents and compliance checks use this contract instead of hardcoded project-specific playbooks.
 
 ---
 
-## LLM-first compilation recovery
+## Build validation (stack-routed)
 
-When `dotnet build` fails (or blocking compliance is found), the orchestrator runs a **compilation fix loop** and the **auditor recovery loop** with the same context preparation.
+`BuildValidationAgent` is a thin router — it does not assume `dotnet` for every repo.
 
-### `PrepareRecoveryContext` (orchestrator)
+| Stack | Support class | What runs |
+|-------|---------------|-----------|
+| **DotNet** | `DotNetBuildValidationSupport` | Find `.sln`/`.csproj`, `dotnet build`, per-production-project build, `dotnet test` |
+| **Frontend** | `FrontendBuildValidationSupport` | Find `package.json` (prefers `Frontend.WebProjectRoot`), `npm run build` when a `build` script exists |
+| **Both** | Merged `AgentResult` | Combined findings; `ProductionBuildPassed` requires all stacks to pass |
+| **Neither** | Skip | Medium-severity finding; no recovery loop triggered |
 
-Called before every `RecoveryAgent` invocation (`WorkflowOrchestrator.Recovery.cs`):
+Error extraction is stack-specific: DotNet uses `: error ` and `Build FAILED` banners; frontend uses `ERROR in`, `Failed to compile`, `Module not found`, etc.
 
-1. **Allowed files** — paths derived from build messages, type symbols, contract dependencies, and error-directory siblings (`DetermineAllowedFiles`, up to 80 paths).
-2. **Exemplar sources** — full file contents inlined into `CompilationFixExemplarContext` (`CompilationFixContextBuilder`).
+Actionable vs skipped findings: `WorkflowFindingRules.HasActionableBuildFindings` uses `BuildFailureClassifier.IsActionableFinding` (High/Blocker, not summary banners) for DotNet repos.
+
+---
+
+## LLM-first recovery
+
+When build validation fails or blocking compliance is found, the orchestrator runs a **recovery loop** (`WorkflowOrchestrator.Recovery.cs`).
+
+### `RecoveryContextSupport` (stack router)
+
+| Stack | Behavior |
+|-------|----------|
+| **DotNet** | `CSharpCompilationFixSupport`: allowed files from build messages + contract; full exemplar sources inlined |
+| **Other** | Allowed files = all proposed files; no exemplar inlining |
+
+Called before every `RecoveryAgent` invocation.
 
 ### What goes into the recovery prompt
 
 | Prompt section | Source |
 |----------------|--------|
-| Exemplar sources (full files) | `CompilationFixExemplarContext` |
+| Exemplar sources (full files) | `CompilationFixExemplarContext` (DotNet) |
 | Allowed files (path list) | `CompilationFixAllowedFiles` |
-| Build errors | `BuildValidation.Findings` |
+| Build errors | `BuildValidation.Findings` (stack-aware filtering in `RecoveryAgent`) |
 | Apply rejections + hints | `ComplianceIssues` |
 | Repo layout | `Contract.FormatStructureSummary()` |
 | Task | `Task.Description` |
 
 `RecoveryAgent` does **not** use `CombinedRagContext` for fixes.
 
-### Mandatory vs optional inlined files
+### Mandatory vs optional inlined files (DotNet)
 
-`CompilationFixContextBuilder` uses two tiers:
+`CSharpCompilationFixSupport.BuildContext` uses two tiers:
 
 | Tier | Included | Limits |
 |------|----------|--------|
-| **Mandatory** | Every `.cs` / `.csproj` path in build output; all `.cs` siblings in those directories; layer/entity exemplars from contract | Always inlined (no cap) |
-| **Optional** | Other allowed paths (ranked by relevance) | `CompilationFixMaxContextChars` (default `200000`; `0` = unlimited) and `CompilationFixMaxOptionalFiles` (`0` = unlimited) |
-
-Timeline logs `inlined N full source file(s)` and, if truncated, `M lower-priority path(s) not inlined`.
+| **Mandatory** | Every `.cs` / `.csproj` path in build output; siblings in those directories; layer/entity exemplars | Always inlined |
+| **Optional** | Other allowed paths (ranked by relevance) | `CompilationFixMaxContextChars` (default `200000`; `0` = unlimited) and `CompilationFixMaxOptionalFiles` |
 
 ### Apply after recovery
 
-1. `GeneratedFileApplier` writes `Recovery.ProposedFiles` (C# guards, interface implementation check, layer/entity validation).
-2. `RecordNuGetPackageChanges` runs `dotnet add package` when test code needs new packages (`ProjectPackageAuditor`).
+1. `GeneratedFileApplier` writes recovery files (C# guards when `stack.DotNet`).
+2. `RecordNuGetPackageChanges` (DotNet only) — `ProjectPackageAuditor`.
 3. `BuildValidationAgent` runs again.
 
-Build-message parsing (paths, quoted type names) is centralized in `BuildFailureClassifier` — not per error-code handlers.
+Build-message parsing for DotNet recovery is centralized in `BuildFailureClassifier` (`Orchestration/DotNet/CSharpCompilationFixSupport`).
 
 ---
 
 ## RAG pipeline
 
-- **Scanner:** `RepoCodeFileScanner` — relevant source extensions, skips `bin`/`obj`/noise.
+- **Scanner:** `RepoCodeFileScanner` — includes `.cs`/`.csproj` only when `contract.Stack.DotNet`.
 - **Chunking:** Semantic Kernel text chunking per file.
 - **Hybrid retrieval** (`UseHybridRag: true`):
-  - **Lexical** — term overlap (weight `RagLexicalWeight`, default `0.55`).
-  - **Vector** — OpenAI embeddings (weight `RagVectorWeight`, default `0.45`).
-- **Composer:** `RagContextComposer` merges structure, conventions, exemplar snippets, and task-specific retrieval into `CombinedRagContext` for **planning and implementation** agents.
+  - **Lexical** — term overlap (`RagLexicalWeight`, default `0.55`).
+  - **Vector** — OpenAI embeddings (`RagVectorWeight`, default `0.45`).
+- **Composer:** `RagContextComposer` merges structure, stack-specific rules/exemplars, and semantic queries from `CSharpRagContextSupport` / `FrontendRagContextSupport`.
 
 Embeddings are held **in memory** for the run (not persisted to a vector DB).
 
-Recovery uses **on-disk full files** for error-adjacent paths (see [LLM-first compilation recovery](#llm-first-compilation-recovery)), not RAG chunks.
+Recovery uses **on-disk full files** for DotNet error-adjacent paths, not RAG chunks.
 
 ---
 
 ## Safety and compliance (deterministic)
 
-These run without the LLM and produce `AgentFinding` entries (High/Blocker can trigger recovery):
+Compliance runs without the LLM via `ContractComplianceValidator` and `ComplianceRuleRegistry.For(stack)`:
 
-| Check | Class | What it enforces |
-|-------|--------|------------------|
-| Layer contracts | `ContractComplianceValidator` | I*{Role} + implementation pairs for discovered layers (repository, service, controller). |
-| Path conventions | `ValidatePathConventions` | Controllers, indexes, duplicate index files. |
-| Missing tests | `TestCoverageAuditor` | `*Tests.cs` per discovered layer (repository, service, controller, …). |
-| File quality | `GeneratedFileApplier` | Non-prose, C# shape, layer profiles, interface parity (including generic interfaces, e.g. `IExpression<T>`). |
-| Package restore | `ProjectPackageAuditor` | Adds missing test NuGet packages after apply; skips invalid/non-XML `.csproj` files. |
-| Bootstrap DI | `CompositionRootMerger` | Appends `services.Add*` lines only; never rewrites bootstrap `.cs` files. |
-| Test syntax | `CodeExemplarContext.TryValidate` | Balanced braces; rejects `;;` and similar. |
-| Test template | `LayerTestTemplateBuilder` | Clones sibling layer `*Tests.cs` exemplar if LLM output is invalid. |
+| Scope | Rules / checks |
+|-------|----------------|
+| **Shared** | Architecture coverage, protected contract files |
+| **DotNet** | Layer contracts, path conventions, DI wiring, interface parity, missing unit tests, package restore |
+| **Frontend** | Frontend path conventions |
 
-### Production vs test build failures
+High/Blocker findings can trigger the recovery loop.
+
+| Check area | DotNet location | What it enforces |
+|------------|-----------------|------------------|
+| Layer contracts | `DotNetComplianceRules` | I*{Role} + implementation pairs |
+| Path conventions | DotNet + `FrontendComplianceRules` | Controllers, indexes, frontend module layout |
+| Missing tests | `TestCoverageAuditor` | `*Tests.cs` per discovered layer |
+| File quality | `GeneratedFileApplier` + `CSharpApplySupport` | C# shape, interface parity (when `stack.DotNet`) |
+| Package restore | `ProjectPackageAuditor` | Missing test NuGet packages after apply |
+| Bootstrap DI | `CompositionRootMerger` | Appends `services.Add*` lines only |
+
+### Production vs test build failures (DotNet)
+
+Handled by `TestReleasePolicySupport` → `DotNetTestReleasePolicySupport`:
 
 | Situation | Behavior |
 |-----------|----------|
 | Production projects fail | Full rollback of generated changes → **Blocked**. |
-| Only test project fails | **Quarantine** test files, defer test entity, downgrade to Medium findings, **keep production code**, continue to PR. |
-| Production passes, tests deferred | Timeline notes “Proceeding with production changes…”. |
+| Only test project fails | **Quarantine** `*Tests.cs` artifacts, defer test entity, downgrade to Medium findings, **keep production code**, continue to PR. |
+| Production passes, tests deferred | Timeline notes deferred test gate; `DeferredTestEntities` skips future test generation pressure. |
+
+Frontend-only repos skip test quarantine (no `*Tests.cs` convention).
 
 ---
 
@@ -284,35 +359,52 @@ agents-mcp-rag/
 ├── agents-mcp-rag.sln
 ├── global.json
 ├── README.md
-├── .gitignore
 └── agents-mcp-rag/
-    ├── Program.cs                 # Entry point
-    ├── appsettings.json           # Configuration
+    ├── Program.cs
+    ├── appsettings.json
     ├── Application/
-    │   └── ApplicationHost.cs     # Wires settings → kernel → MCP → runner
+    │   └── ApplicationHost.cs
     ├── Configuration/
-    │   ├── AppSettings.cs
-    │   ├── AppSettingsLoader.cs
-    │   └── CompilationFixContextOptions.cs
     ├── Workflow/
-    │   ├── WorkflowRunner.cs      # RAG + orchestrator
+    │   ├── WorkflowRunner.cs          # Contract discover → RAG → orchestrator
     │   └── WorkflowResultPrinter.cs
     ├── Orchestration/
     │   ├── WorkflowOrchestrator.cs
-    │   ├── WorkflowOrchestrator.CompilationFix.cs
     │   ├── WorkflowOrchestrator.Recovery.cs
-    │   ├── CompilationFixContextBuilder.cs
-    │   ├── CompilationFixFileResolver.cs
-    │   └── ContractComplianceValidator.cs
-    ├── Agents/                    # Architecture, Backend, Frontend, Audit, Recovery, Build
+    │   ├── WorkflowFindingRules.cs    # HasUnresolvedCompilationProblems, scope, capabilities
+    │   ├── RecoveryContextSupport.cs  # Stack router for recovery context
+    │   ├── TestReleasePolicySupport.cs
+    │   ├── ContractComplianceValidator.cs
+    │   ├── Compliance/
+    │   │   ├── ComplianceContext.cs   # carries RepoStack
+    │   │   ├── ComplianceRuleRegistry.cs
+    │   │   ├── FrontendComplianceRules.cs
+    │   │   └── DotNet/
+    │   │       └── DotNetComplianceRules.cs
+    │   └── DotNet/
+    │       ├── CSharpCompilationFixSupport.*.cs
+    │       └── DotNetTestReleasePolicySupport.cs
+    ├── Agents/
     ├── Infrastructure/
-    │   ├── Rag/                   # Index, context composer, repo scanner
-    │   ├── CodeApply/             # File applier, exemplars, contract guards
-    │   ├── Compliance/            # Layer conventions, tests, DI wiring, build classifier, packages
-    │   ├── RepoContract/          # Discovered layout and conventions per target repo
-    │   ├── Git/                   # Git commands, GitHub MCP, repo resolver
-    │   ├── Kernel/                # Semantic Kernel factory
-    │   └── Artifacts/             # Workflow output writer
+    │   ├── RepoStack.cs               # Stack snapshot + WhenDotNet/WhenFrontend helpers
+    │   ├── RepoContract/
+    │   ├── Rag/
+    │   │   ├── RagContextComposer.cs
+    │   │   ├── FrontendRagContextSupport.cs
+    │   │   └── DotNet/
+    │   │       └── CSharpRagContextSupport.cs
+    │   ├── CodeApply/
+    │   │   ├── ApplyContext.cs
+    │   │   ├── GeneratedFileApplier.cs
+    │   │   └── DotNet/                # CSharpApplySupport, guards, DI merge
+    │   ├── BuildValidation/
+    │   │   ├── FrontendBuildValidationSupport.cs
+    │   │   └── DotNet/
+    │   │       └── DotNetBuildValidationSupport.cs
+    │   ├── Compliance/
+    │   │   └── DotNet/                # BuildFailureClassifier, auditors, DI discoverer
+    │   ├── Git/
+    │   └── Kernel/
     └── Models/
         └── WorkflowModels.cs
 ```
@@ -329,8 +421,8 @@ agents-mcp-rag/
 | `GitHub:Pat` | GitHub personal access token for MCP. |
 | `Repo:Path` | Local path or Git remote URL of target repo. |
 | `Workflow:MaxRecoveryAttempts` | Auditor/recovery loop limit. |
-| `Workflow:MaxCompilationFixAttempts` | Recovery-driven compile fix limit. |
-| `Workflow:CompilationFixMaxContextChars` | Max characters for optional inlined files in recovery prompt (`0` = unlimited). Mandatory error files are always inlined. |
+| `Workflow:MaxCompilationFixAttempts` | Build-failure recovery loop limit. |
+| `Workflow:CompilationFixMaxContextChars` | Max characters for optional inlined files in DotNet recovery prompt (`0` = unlimited). |
 | `Workflow:CompilationFixMaxOptionalFiles` | Max optional file count after mandatory set (`0` = unlimited). |
 | `Workflow:UseHybridRag` | Enable lexical + vector retrieval. |
 | `Workflow:RagLexicalWeight` / `RagVectorWeight` | Hybrid score weights (should sum ~1). |
@@ -343,18 +435,20 @@ agents-mcp-rag/
 ## Output
 
 - **Console:** Step banners, agent summaries, timeline.
-- **Artifacts:** Written under the target repo (or configured artifact path) by `WorkflowArtifactWriter` on success.
+- **Artifacts:** Written under the target repo (or configured artifact path) on success.
 - **GitHub:** PR URL/status when `AutoCreatePullRequest` is enabled and the target is a git repo.
 
 Example timeline lines:
 
 ```
 2026-05-18T09:49:18Z | Architecture planning started.
+2026-05-18T09:49:18Z | Repository layers (contract/RAG): backend=yes, frontend=yes
+2026-05-18T09:49:18Z | Implementation scope: backend=True, frontend=True
 2026-05-18T09:49:18Z | Generated files applied: SinglePageSample.Repository/...
 2026-05-18T09:49:18Z | Compilation fix: inlined 8 full source file(s): ...
-2026-05-18T09:49:18Z | Compilation fix applied files: ...
 2026-05-18T09:49:18Z | NuGet restore: added package xunit to ...
 2026-05-18T09:49:18Z | Build passed after compilation fix attempt 1.
+2026-05-18T09:49:18Z | Quarantined 2 failing test artifact(s); production code retained.
 2026-05-18T09:49:18Z | Workflow ready for PR.
 ```
 

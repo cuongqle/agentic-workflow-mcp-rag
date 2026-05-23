@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
 internal static class SolutionProjectCatalog
 {

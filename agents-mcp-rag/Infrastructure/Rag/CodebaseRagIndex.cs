@@ -29,16 +29,16 @@ sealed class CodebaseRagIndex
     public int TotalChunks => _chunks.Count;
 
     public static Task<CodebaseRagIndex> BuildAsync(string repoPath)
-        => BuildAsync(repoPath, RagBuildOptions.Default);
+        => BuildAsync(repoPath, RagBuildOptions.Default, contract: null);
 
-    public static async Task<CodebaseRagIndex> BuildAsync(string repoPath, RagBuildOptions options)
+    public static async Task<CodebaseRagIndex> BuildAsync(string repoPath, RagBuildOptions options, RepoContract? contract = null)
     {
         if (!Directory.Exists(repoPath))
         {
             return new CodebaseRagIndex(new List<RagChunk>(), 0, null, options.LexicalWeight, options.VectorWeight);
         }
 
-        var files = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath).ToList();
+        var files = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath, contract).ToList();
         var chunks = new List<RagChunk>();
         var chunkTexts = new List<string>();
         var chunkSources = new List<string>();

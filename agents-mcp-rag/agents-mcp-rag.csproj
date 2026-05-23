@@ -10,6 +10,14 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <Using Include="agents_mcp_rag.Infrastructure" />
+      <Using Include="agents_mcp_rag.Infrastructure.Compliance.DotNet" />
+      <Using Include="agents_mcp_rag.Infrastructure.CodeApply.DotNet" />
+      <Using Include="agents_mcp_rag.Infrastructure.Rag.DotNet" />
+      <Using Include="agents_mcp_rag.Infrastructure.BuildValidation.DotNet" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="LangChain" Version="0.17.1" />
       <PackageReference Include="Microsoft.SemanticKernel" Version="1.76.0" />
       <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.76.0" />
