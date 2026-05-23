@@ -42,7 +42,7 @@ RepoStack routes at orchestration boundaries:
 
 | Layer | Generic (parent) | DotNet (`*/DotNet/`) | Frontend (parent or `Frontend*`) |
 |-------|------------------|----------------------|----------------------------------|
-| Apply | `ApplyContext`, `GeneratedFileApplier` | `CSharpApplySupport`, guards, DI merge | extension checks in applier |
+| Apply | `ApplyContentGuard`, `ApplyContext`, `GeneratedFileApplier` | `CSharpApplySupport`, DotNet guards, DI merge | `FrontendApplyGuard` |
 | RAG | `RagContextComposer`, `RepoCodeFileScanner` | `CSharpRagContextSupport` | `FrontendRagContextSupport` |
 | Compliance | `ComplianceRuleRegistry`, `ComplianceContext` | `DotNetComplianceRules`, auditors | `FrontendComplianceRules` |
 | Build | `BuildValidationAgent` | `DotNetBuildValidationSupport` | `FrontendBuildValidationSupport` |

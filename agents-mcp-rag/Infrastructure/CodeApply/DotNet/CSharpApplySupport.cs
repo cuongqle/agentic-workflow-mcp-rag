@@ -144,45 +144,132 @@ internal static class CSharpApplySupport
         return true;
     }
 
-    internal static bool TryValidateCommonShape(string content, bool isOverwritingExistingFile, out string reason)
+    internal static bool TryValidateDotNet(
+        ApplyContext ctx,
+        string relativePath,
+        string content,
+        bool existedBefore,
+        string? existingOnDisk,
+        ref string validatedContent,
+        out string? reason)
     {
-        reason = string.Empty;
-        string trimmed = content.Trim();
-        int lineCount = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).Length;
+        reason = null;
 
-        if (string.IsNullOrWhiteSpace(trimmed))
+        if (!PreExistingContractGuard.TryValidateOverwrite(
+                relativePath, existingOnDisk, content, ctx.WorkflowProposedPaths, out string contractReason))
         {
-            reason = "Generated content is empty.";
+            reason = contractReason;
             return false;
         }
 
-        if (trimmed.Length < 40)
+        if (TypeMemberConsistencyGuard.IsConsumerRelativePath(ctx.RepoPath, relativePath, ctx.ProposedTypeDefinitions)
+            && !TypeMemberConsistencyGuard.TryValidateConsumerContent(
+                ctx.RepoPath, relativePath, content, ctx.ProposedTypeDefinitions, out string consumerReason))
         {
-            reason = "Generated content is too short to be a real source file.";
+            reason = consumerReason;
             return false;
         }
 
-        if (LooksLikePlainEnglishSentence(trimmed))
+        if (DependencyWiringAuditor.IsCompositionRootPath(relativePath))
         {
-            reason = "Generated content looks like prose, not source code.";
+            if (!CompositionRootMerger.TryMergeIntoExisting(
+                    existingOnDisk ?? string.Empty,
+                    content,
+                    out string mergedBootstrap,
+                    out string? mergeReason,
+                    ctx.WorkflowProposedPaths))
+            {
+                reason = mergeReason ?? "Rejected invalid composition-root rewrite; append DI registration lines only.";
+                return false;
+            }
+
+            validatedContent = mergedBootstrap;
+            content = mergedBootstrap;
+        }
+
+        if (ctx.Contract.Entity is not null
+            && !ctx.Contract.Entity.ValidateEntityContent(relativePath, content, out string entityReason))
+        {
+            reason = entityReason;
             return false;
         }
 
-        if (trimmed.Contains("Corrected the", StringComparison.OrdinalIgnoreCase)
-            || trimmed.Contains("for frontend interaction", StringComparison.OrdinalIgnoreCase))
+        if (relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && !TryValidate(ctx, relativePath, content, existedBefore, out reason))
         {
-            reason = "Generated content appears to be explanatory text, not code.";
-            return false;
-        }
-
-        if (isOverwritingExistingFile && lineCount < 4)
-        {
-            reason = "Refused to overwrite existing file with very short output.";
             return false;
         }
 
         return true;
     }
+
+    internal static string? TryExtractDeclaredTypeName(string content)
+    {
+        Match match = Regex.Match(
+            content,
+            @"\bpublic\s+(?:partial\s+)?(?:class|interface)\s+([A-Za-z_][A-Za-z0-9_]*)\b");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>
+    /// When generated C# declares a type that already exists on disk, resolve to the existing path or reject duplicates.
+    /// </summary>
+    internal static bool TryResolveDeclaredTypePath(
+        string repoPath,
+        string relativePath,
+        string content,
+        ref string resolvedRelativePath,
+        out string? issue)
+    {
+        issue = null;
+        string? declaredType = TryExtractDeclaredTypeName(content);
+        if (string.IsNullOrWhiteSpace(declaredType))
+        {
+            return true;
+        }
+
+        string targetPath = relativePath;
+        string fileName = Path.GetFileName(targetPath);
+        var typeMatches = FindFilesDeclaringType(repoPath, declaredType);
+        if (typeMatches.Any(match => match.Equals(targetPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        string expectedFileName = $"{declaredType}.cs";
+        string? preferred = typeMatches.FirstOrDefault(match =>
+                                  Path.GetFileName(match).Equals(expectedFileName, StringComparison.OrdinalIgnoreCase))
+                              ?? (typeMatches.Count == 1 ? typeMatches[0] : null);
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            resolvedRelativePath = preferred;
+            return true;
+        }
+
+        if (typeMatches.Count > 1)
+        {
+            issue =
+                $"Type '{declaredType}' is already declared in: {string.Join(", ", typeMatches)}. "
+                + $"Update the existing file instead of creating '{fileName}'.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool DeclaresType(string content, string typeName) =>
+        Regex.IsMatch(content, $@"\b(?:public\s+)?(?:partial\s+)?class\s+{Regex.Escape(typeName)}\b")
+        || Regex.IsMatch(content, $@"\b(?:public\s+)?(?:partial\s+)?interface\s+{Regex.Escape(typeName)}\b");
+
+    private static List<string> FindFilesDeclaringType(string repoPath, string typeName) =>
+        Directory
+            .EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                        && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            .Where(path => DeclaresType(File.ReadAllText(path), typeName))
+            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private static string NormalizeRepositoryUsings(string relativePath, string content, string? repositoryInterfacesNamespace)
     {
@@ -313,13 +400,6 @@ internal static class CSharpApplySupport
 
         return content;
     }
-
-    private static bool LooksLikePlainEnglishSentence(string content) =>
-        !content.Contains("{", StringComparison.Ordinal)
-        && !content.Contains("}", StringComparison.Ordinal)
-        && !content.Contains(";", StringComparison.Ordinal)
-        && content.EndsWith(".", StringComparison.Ordinal)
-        && content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).Length <= 2;
 
     private static bool ValidateDynamicLayerConventions(
         string relativePath, string content, LayerConventionProfiles conventions, string repoPath, out string reason)
@@ -589,5 +669,58 @@ internal static class CSharpApplySupport
         }
 
         return content[braceStart..];
+    }
+
+    internal static bool IsDotNetSourcePath(string relativePath)
+    {
+        string extension = Path.GetExtension(relativePath).ToLowerInvariant();
+        return extension is ".cs" or ".csproj";
+    }
+
+    /// <summary>
+    /// Layer-aware apply order: interfaces → entities → indexes → misc → repositories → controllers → tests.
+    /// Non-C# paths (e.g. frontend) receive default priority and sort alphabetically among peers.
+    /// </summary>
+    internal static List<GeneratedFile> OrderForApply(IReadOnlyList<GeneratedFile> files) =>
+        files
+            .OrderBy(f => GetApplyPriority(f.RelativePath))
+            .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    internal static int GetApplyPriority(string relativePath)
+    {
+        string fileName = Path.GetFileName(relativePath);
+        if (fileName.StartsWith('I') && fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (relativePath.Contains("/Entities/", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains("/Models/", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+
+        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase) && !fileName.StartsWith('I'))
+        {
+            return 4;
+        }
+
+        if (fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 5;
+        }
+
+        if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return 6;
+        }
+
+        return 3;
     }
 }

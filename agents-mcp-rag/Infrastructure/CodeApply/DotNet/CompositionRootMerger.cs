@@ -56,6 +56,36 @@ internal static class CompositionRootMerger
         return CodeExemplarContext.TryValidate(mergedContent, out reason);
     }
 
+    /// <summary>
+    /// Post-apply pass: sanitize on-disk composition-root files that were corrupted by earlier apply/merge steps.
+    /// </summary>
+    internal static IEnumerable<string> RepairCompositionRootFiles(string repoPath)
+    {
+        foreach (string path in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
+        {
+            if (path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string relative = Path.GetRelativePath(repoPath, path).Replace('\\', '/');
+            if (!DependencyWiringAuditor.IsCompositionRootPath(relative))
+            {
+                continue;
+            }
+
+            string original = File.ReadAllText(path);
+            string sanitized = SanitizeBootstrapContent(original);
+            if (!sanitized.Equals(original, StringComparison.Ordinal)
+                && PassesBootstrapSyntaxChecks(sanitized, out _))
+            {
+                File.WriteAllText(path, sanitized);
+                yield return $"repaired bootstrap: {relative}";
+            }
+        }
+    }
+
     internal static string SanitizeBootstrapContent(string content) =>
         DependencyWiringAuditor.SanitizeBootstrapRegistrations(RemoveOrphanRegistrationLines(content));
 
