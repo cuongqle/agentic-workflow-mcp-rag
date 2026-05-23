@@ -199,6 +199,62 @@ Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilati
 | **18** | Final gate | Rollback only on **production** build failure; else PR path. |
 | **19** | Artifacts + `GitHubMcpAdapter` | Timeline, summaries, optional PR. |
 
+### CodeApply lifecycle
+
+Agents only **propose** files in memory (`GeneratedFile`: path + content). **CodeApply** (`GeneratedFileApplier.ApplyAsync` + `ApplyContext`) is the deterministic gate that validates and writes to disk.
+
+```
+BackendDeveloperAgent / FrontendDeveloperAgent / RecoveryAgent
+        │  (JSON proposals in WorkflowState)
+        ▼
+GeneratedFileApplier.ApplyAsync
+        │  ApplyContext.Create → RepoContract + RepoStack + catalogs (DotNet)
+        │  per file: canonical path → normalize → validate → write
+        │  post-pass (DotNet): DI wiring + composition-root repair
+        ▼
+AppliedFileChange[] captured for rollback
+        ▼
+Compliance + BuildValidation (check what was written, or why apply rejected)
+```
+
+#### When apply runs
+
+| # | Trigger | Workflow stage | Source files |
+|---|---------|----------------|--------------|
+| **1** | After backend/frontend implementation | `Implementing` | `Backend.ProposedFiles` + `Frontend.ProposedFiles` |
+| **2** | Compilation-fix loop (build/compliance failures) | `Integrating` | `Recovery.ProposedFiles` |
+| **3** | Auditor recovery loop (blocking audit findings) | `Recovering` | `Recovery.ProposedFiles` |
+
+Stage selects the file set: implementation stages use backend/frontend proposals; `Integrating` and `Recovering` use recovery proposals only.
+
+#### What each apply pass does
+
+| Step | Purpose |
+|------|---------|
+| **Canonical path** | Resolve LLM path to repo layout via `RepoContract`. |
+| **Normalize** | C# cleanup when `stack.DotNet` (`CSharpApplySupport`). |
+| **Validate** | Reject bad output before write — common shape, then stack-specific guards. |
+| **Write** | `File.WriteAllText` only when validation passes. |
+| **Post-apply (DotNet)** | Auto-add DI registrations; repair composition-root files. |
+| **Track rollback** | Record path, prior existence, and previous content in `AppliedFileChange`. |
+
+Rejected files become compliance issues (`Apply rejected 'path': reason`) and can re-trigger recovery via `HasUnresolvedApplyRejections`.
+
+#### Stack-aware validation
+
+| Stack | Guards (examples) |
+|-------|-------------------|
+| **DotNet** | Layer conventions, interface parity, entity rules, composition-root merge-only, pre-existing contract protection |
+| **Frontend** | Basic JS/TS/HTML shape checks by extension |
+| **Shared** | Non-prose content, balanced braces, placeholder/stub rejection |
+
+#### Rollback
+
+`GeneratedFileApplier.RollbackAsync` restores or deletes files using captured `AppliedFileChange` records:
+
+- **Test quarantine (DotNet):** rolls back only failing `*Tests.cs` artifacts; keeps production code.
+- **Final block:** rolls back all tracked changes when production build still fails after audit/recovery.
+
 ### Workflow stages (`WorkflowStage`)
 
 ```
