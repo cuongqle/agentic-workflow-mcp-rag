@@ -3,7 +3,7 @@ using System.Text;
 namespace agents_mcp_rag.Infrastructure.Rag.DotNet;
 
 /// <summary>
-/// .NET/C#-specific RAG context sections — only invoked when RepoContract.HasDotNetBackend.
+/// .NET/C#-specific RAG context sections — only invoked when <see cref="RepoStack.DotNet"/>.
 /// </summary>
 internal static class CSharpRagContextSupport
 {

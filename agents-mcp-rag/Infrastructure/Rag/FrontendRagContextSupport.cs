@@ -3,7 +3,7 @@ using System.Text;
 namespace agents_mcp_rag.Infrastructure;
 
 /// <summary>
-/// Frontend (JS/TS/HTML) RAG context — only invoked when RepoContract.HasFrontend.
+/// Frontend (JS/TS/HTML) RAG context — only invoked when <see cref="RepoStack.Frontend"/>.
 /// </summary>
 internal static class FrontendRagContextSupport
 {

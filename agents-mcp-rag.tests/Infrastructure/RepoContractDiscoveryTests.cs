@@ -11,8 +11,8 @@ public class RepoContractDiscoveryTests
         RepoContract contract = RepoContractDiscoverer.Discover("/path/does/not/exist");
 
         Assert.Equal("/path/does/not/exist", contract.RepoPath);
-        Assert.False(contract.HasDotNetBackend);
-        Assert.False(contract.HasFrontend);
+        Assert.False(contract.Stack.DotNet);
+        Assert.False(contract.Stack.Frontend);
         Assert.Empty(contract.CompositionRootPaths);
     }
 
@@ -22,8 +22,8 @@ public class RepoContractDiscoveryTests
         using var repo = new TempRepo();
         RepoContract contract = RepoContractDiscoverer.Discover(repo.Path);
 
-        Assert.False(contract.HasDotNetBackend);
-        Assert.False(contract.HasFrontend);
+        Assert.False(contract.Stack.DotNet);
+        Assert.False(contract.Stack.Frontend);
         Assert.Empty(contract.PathRules);
     }
 
@@ -71,7 +71,7 @@ public class RepoContractDiscoveryTests
 
         RepoContract contract = RepoContractDiscoverer.Discover(repo.Path);
 
-        Assert.True(contract.HasFrontend);
-        Assert.True(contract.HasDotNetBackend || contract.CompositionRootPaths.Count > 0 || contract.LayerConventions.GetActiveProfiles().Any());
+        Assert.True(contract.Stack.Frontend);
+        Assert.True(contract.Stack.DotNet);
     }
 }

@@ -37,7 +37,7 @@ public class RepoContractCanonicalPathTests
     }
 
     [Fact]
-    public void HasDotNetBackend_false_when_no_signals()
+    public void Stack_none_when_no_signals()
     {
         var contract = new RepoContract
         {
@@ -45,8 +45,8 @@ public class RepoContractCanonicalPathTests
             RegistrationScope = RegistrationScopeConvention.None
         };
 
-        Assert.False(contract.HasDotNetBackend);
-        Assert.False(contract.HasFrontend);
+        Assert.False(contract.Stack.DotNet);
+        Assert.False(contract.Stack.Frontend);
         Assert.Equal(RepoStack.None, contract.Stack);
     }
 }

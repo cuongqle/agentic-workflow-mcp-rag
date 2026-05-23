@@ -22,14 +22,14 @@ Given a task (e.g. “add a Timesheet entity like Employee”), the system:
 
 ## Stack-aware architecture
 
-Discovery happens **once** at bootstrap. Every downstream subsystem reads the same snapshot instead of re-checking `HasDotNetBackend` / `HasFrontend` inline.
+Discovery happens **once** at bootstrap. Every downstream subsystem reads `RepoContract.Stack` (or `RepoStack.From(state)`).
 
 ```
 RepoContractDiscoverer.Discover(repoPath)
   └── RepoContract
-        ├── HasDotNetBackend   (DI scope, composition roots, layer conventions)
-        ├── HasFrontend        (frontend module template discovered)
-        └── .Stack → RepoStack(DotNet, Frontend)
+        ├── Stack.DotNet     (DI scope, composition roots, layer conventions)
+        ├── Stack.Frontend   (frontend module template discovered)
+        └── discovered data  (PathRules, Frontend template, LayerConventions, …)
 
 RepoStack routes at orchestration boundaries:
   ├── ApplyContext / GeneratedFileApplier     → CodeApply/DotNet/*
@@ -294,11 +294,11 @@ Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** 
 
 `RepoContractDiscoverer` scans the target repo at startup and stores layout on `WorkflowState.Contract`:
 
-| Signal | Property | Used for |
-|--------|----------|----------|
-| Layer conventions, DI scope, composition roots | `HasDotNetBackend` | C# apply guards, DotNet compliance, `dotnet` build, recovery context |
-| Frontend module template | `HasFrontend` | Frontend RAG, path rules, `npm run build` |
-| Both | `Contract.Stack` | Single routing snapshot via `RepoStack.From(contract)` |
+| Signal | Where | Used for |
+|--------|-------|----------|
+| `Stack.DotNet` | DI scope, composition roots, layer conventions | C# apply guards, DotNet compliance, `dotnet` build, recovery context |
+| `Stack.Frontend` | `Frontend` module template != null | Frontend RAG, path rules, `npm run build` |
+| Both | `contract.Stack` | Single routing snapshot via `RepoStack.From(contract)` |
 
 Agents and compliance checks use this contract instead of hardcoded project-specific playbooks.
 

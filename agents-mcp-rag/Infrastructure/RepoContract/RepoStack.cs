@@ -2,14 +2,13 @@ namespace agents_mcp_rag.Infrastructure;
 
 /// <summary>
 /// Discovered repo stacks — single snapshot used across apply, RAG, compliance, and recovery.
-/// Source of truth remains <see cref="RepoContract.HasDotNetBackend"/> / <see cref="RepoContract.HasFrontend"/>.
+/// Discovered repo stacks — routing snapshot from <see cref="RepoContract.Stack"/>.
 /// </summary>
 readonly record struct RepoStack(bool DotNet, bool Frontend)
 {
     public static RepoStack None => new(false, false);
 
-    public static RepoStack From(RepoContract contract) =>
-        new(contract.HasDotNetBackend, contract.HasFrontend);
+    public static RepoStack From(RepoContract contract) => contract.Stack;
 
     public static RepoStack From(WorkflowState state) =>
         state.Contract is not null

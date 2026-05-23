@@ -1,7 +1,7 @@
 using agents_mcp_rag.Infrastructure;
 
 /// <summary>
-/// Frontend (JS/TS/HTML) compliance rules — only included when RepoContract.HasFrontend.
+/// Frontend (JS/TS/HTML) compliance rules — only included when <see cref="RepoStack.Frontend"/>.
 /// </summary>
 static class FrontendComplianceRules
 {
