@@ -1,6 +1,6 @@
 using agents_mcp_rag.Infrastructure;
 
-namespace agents_mcp_rag.tests.Infrastructure;
+namespace agents_mcp_rag.Tests.Infrastructure;
 
 public class FrontendBuildValidationTests
 {

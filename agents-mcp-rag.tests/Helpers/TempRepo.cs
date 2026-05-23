@@ -1,4 +1,4 @@
-namespace agents_mcp_rag.tests.Helpers;
+namespace agents_mcp_rag.Tests.Helpers;
 
 internal sealed class TempRepo : IDisposable
 {

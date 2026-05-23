@@ -1,7 +1,7 @@
 using agents_mcp_rag.Infrastructure;
-using agents_mcp_rag.tests.Helpers;
+using agents_mcp_rag.Tests.Helpers;
 
-namespace agents_mcp_rag.tests.Infrastructure;
+namespace agents_mcp_rag.Tests.Infrastructure;
 
 public class RepoContractDiscoveryTests
 {

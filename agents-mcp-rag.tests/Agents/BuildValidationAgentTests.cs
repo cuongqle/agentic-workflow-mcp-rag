@@ -1,6 +1,6 @@
 using agents_mcp_rag.Infrastructure;
 
-namespace agents_mcp_rag.tests.Agents;
+namespace agents_mcp_rag.Tests.Agents;
 
 public class BuildValidationAgentTests
 {
