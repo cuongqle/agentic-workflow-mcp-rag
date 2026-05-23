@@ -8,7 +8,7 @@ The orchestrator is **stack-aware**: it discovers repo capabilities once, then r
 
 Given a task (e.g. “add a Timesheet entity like Employee”), the system:
 
-1. Discovers **RepoContract** (layers, frontend layout, DI scope, composition roots) and derives **RepoStack** flags.
+1. Discovers **RepoContract** (layers, frontend layout, DI scope, composition roots) and sets **`contract.Stack`**.
 2. Indexes and retrieves relevant code from the target repo (extensions and exemplars gated by stack).
 3. Plans architecture, then generates backend and/or frontend files in parallel (scope from architecture + contract).
 4. Applies changes with stack-aware safety gates (C# guards only when `stack.DotNet`).
@@ -49,7 +49,52 @@ RepoStack routes at orchestration boundaries:
 | Recovery | `RecoveryContextSupport`, `WorkflowFindingRules` | `CSharpCompilationFixSupport` | proposed-files-only fallback |
 | Test release | `TestReleasePolicySupport` | `DotNetTestReleasePolicySupport` | no-op (extensible) |
 
-**Convention:** stack-specific logic lives under `DotNet/` subfolders (namespaces `*.DotNet`). Generic orchestrators stay at the parent level and call `stack.WhenDotNet(...)` / `stack.WhenFrontend(...)`.
+**Convention:** stack-specific logic lives under `DotNet/` subfolders (namespaces `*.DotNet`). Generic orchestrators stay at the parent level and route with `RepoStack` helpers (`WhenDotNet`, `WhenFrontend`, `DotNetOr`, …). See [RepoStack](#repostack) below.
+
+---
+
+## RepoStack
+
+`RepoStack` (`Infrastructure/RepoContract/RepoStack.cs`) is a small **routing snapshot**: two booleans that say whether the discovered repo has a .NET backend and/or a frontend module layout.
+
+```csharp
+readonly record struct RepoStack(bool DotNet, bool Frontend)
+```
+
+| Member | Purpose |
+|--------|---------|
+| `RepoStack.None` | Neither stack (`DotNet: false`, `Frontend: false`) |
+| `contract.Stack` | Authoritative flags after discovery (see table below) |
+| `RepoStack.From(contract)` | Same as `contract.Stack` |
+| `RepoStack.From(state)` | Uses `state.Contract.Stack` when present; otherwise infers from RAG structure text (fallback for tests / pre-contract paths) |
+| `WhenDotNet` / `WhenFrontend` | Run an action only when that stack is active |
+| `WhenDotNet<T>` / `WhenFrontend<T>` | Return items or `Enumerable.Empty<T>()` |
+| `DotNetOr<T>(whenDotNet, otherwise)` | Pick a value by stack |
+
+**How `contract.Stack` is derived** (single public API — no separate `HasDotNetBackend` / `HasFrontend` properties):
+
+| Flag | True when |
+|------|-----------|
+| `Stack.DotNet` | DI registration scope discovered, **or** composition roots exist, **or** at least one layer convention profile is active |
+| `Stack.Frontend` | A frontend module template was discovered (`Frontend is not null`) |
+
+Mixed repos set both flags. Downstream code should read **`contract.Stack`** or **`RepoStack.From(state)`** and branch on `stack.DotNet` / `stack.Frontend` — not re-scan the repo or duplicate discovery heuristics. Routing boundaries are listed under [Stack-aware architecture](#stack-aware-architecture).
+
+Unit tests: `agents-mcp-rag.tests/Infrastructure/RepoStackTests.cs`.
+
+---
+
+## Repository contract
+
+`RepoContractDiscoverer` scans the target repo once at startup (`RepoContractComposer` merges per-stack discoverers) and stores layout on `WorkflowState.Contract`. **`RepoContract.Stack`** is the routing entry point; other fields hold the discovered data (path rules, layer profiles, frontend template, composition roots, etc.).
+
+| Signal | Stored on contract | Used for |
+|--------|-------------------|----------|
+| `Stack.DotNet` | Derived (see above) | C# apply guards, DotNet compliance, `dotnet` build/test, compilation-fix context, test quarantine |
+| `Stack.Frontend` | Derived (`Frontend != null`) | Frontend RAG, path rules, `npm run build` |
+| Path rules, layers, DI scope, roots | `PathRules`, `LayerConventions`, `RegistrationScope`, `CompositionRootPaths`, … | Canonical paths, compliance, RAG exemplars, apply guards |
+
+Agents and compliance checks use this contract instead of hardcoded project-specific playbooks.
 
 ---
 
@@ -116,7 +161,7 @@ dotnet build agents-mcp-rag.sln
 dotnet test agents-mcp-rag.sln
 ```
 
-Unit tests live in `agents-mcp-rag.tests` (xUnit). They cover stack routing, repo contract discovery/composition, canonical paths, build-failure classification, workflow finding rules, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
+Unit tests live in `agents-mcp-rag.tests` (xUnit). They cover `RepoStack` routing, repo contract discovery/composition, canonical paths, build-failure classification, workflow finding rules, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
 
 ### 4. Run
 
@@ -290,20 +335,6 @@ Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** 
 
 ---
 
-## Repository contract and stack flags
-
-`RepoContractDiscoverer` scans the target repo at startup and stores layout on `WorkflowState.Contract`:
-
-| Signal | Where | Used for |
-|--------|-------|----------|
-| `Stack.DotNet` | DI scope, composition roots, layer conventions | C# apply guards, DotNet compliance, `dotnet` build, recovery context |
-| `Stack.Frontend` | `Frontend` module template != null | Frontend RAG, path rules, `npm run build` |
-| Both | `contract.Stack` | Single routing snapshot via `RepoStack.From(contract)` |
-
-Agents and compliance checks use this contract instead of hardcoded project-specific playbooks.
-
----
-
 ## Build validation (stack-routed)
 
 `BuildValidationAgent` is a thin router — it does not assume `dotnet` for every repo.
@@ -450,8 +481,12 @@ agents-mcp-rag/
     │       └── DotNetTestReleasePolicySupport.cs
     ├── Agents/
     ├── Infrastructure/
-    │   ├── RepoStack.cs               # Stack snapshot + WhenDotNet/WhenFrontend helpers
     │   ├── RepoContract/
+    │   │   ├── RepoContractModels.cs  # RepoContract + Stack property
+    │   │   ├── RepoStack.cs             # routing snapshot + WhenDotNet/WhenFrontend
+    │   │   ├── RepoContractDiscoverer.cs
+    │   │   ├── RepoContractComposer.cs
+    │   │   └── DotNet/                  # DotNetRepoContractDiscoverer
     │   ├── Rag/
     │   │   ├── RagContextComposer.cs
     │   │   ├── FrontendRagContextSupport.cs
