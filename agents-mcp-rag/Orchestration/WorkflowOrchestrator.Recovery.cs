@@ -5,6 +5,7 @@ sealed partial class WorkflowOrchestrator
     private async Task RunCompilationFixLoopAsync(
         WorkflowState state,
         Dictionary<string, AppliedFileChange> rollbackChanges,
+        Dictionary<string, string> pendingApplyRejections,
         CancellationToken cancellationToken)
     {
         int attempt = 0;
@@ -24,6 +25,7 @@ sealed partial class WorkflowOrchestrator
             state.AddTimeline($"Compilation fix attempt {attempt} output generated.");
 
             var applyResult = await GeneratedFileApplier.ApplyAsync(state);
+            WorkflowFindingRules.RecordApplyRejections(state, pendingApplyRejections, applyResult);
             state.AppliedFiles.AddRange(applyResult.AppliedFiles);
             if (applyResult.AppliedFiles.Count > 0)
             {
@@ -35,14 +37,10 @@ sealed partial class WorkflowOrchestrator
                 state.AddTimeline("Compilation fix produced no applicable file changes.");
             }
 
-            state.ComplianceIssues.RemoveAll(WorkflowFindingRules.IsApplyRejectionComplianceIssue);
-            foreach (var rejected in applyResult.RejectedFiles)
+            foreach (ApplyIssue rejected in applyResult.RejectedFiles)
             {
-                string issue = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
-                    rejected.RelativePath,
-                    rejected.Reason);
-                state.AddTimeline(issue);
-                state.ComplianceIssues.Add(issue);
+                state.AddTimeline(
+                    WorkflowFindingRules.FormatApplyRejectionComplianceIssue(rejected.RelativePath, rejected.Reason));
             }
 
             RecordNuGetPackageChanges(state);

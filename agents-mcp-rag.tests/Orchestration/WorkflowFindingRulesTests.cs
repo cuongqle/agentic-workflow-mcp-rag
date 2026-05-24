@@ -133,4 +133,46 @@ public class WorkflowFindingRulesTests
 
         Assert.Equal(3, all.Count);
     }
+
+    [Fact]
+    public void RecordApplyRejections_clears_resolved_paths()
+    {
+        WorkflowState state = WorkflowStateBuilder.Create("/repo");
+        var pending = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        const string path = "src/TimesheetRepository.cs";
+
+        WorkflowFindingRules.RecordApplyRejections(
+            state,
+            pending,
+            new ApplyResult([], [new ApplyIssue(path, "missing constructor")], []));
+        Assert.Single(pending);
+
+        WorkflowFindingRules.RecordApplyRejections(state, pending, new ApplyResult([path], [], []));
+        Assert.Empty(pending);
+        Assert.Empty(WorkflowFindingRules.ToApplyRejectionFindings(pending));
+    }
+
+    [Fact]
+    public void GetFilesForComplianceValidation_prefers_applied_disk_content_over_stale_proposal()
+    {
+        using TempRepo repo = new();
+        repo.WriteFile("src/TimesheetRepository.cs", "public class TimesheetRepository { public TimesheetRepository(IDbStore db) : base(db) {} }");
+
+        WorkflowState state = WorkflowStateBuilder.Create(repo.Path);
+        state.Backend = new AgentResult
+        {
+            ProposedFiles =
+            [
+                new GeneratedFile
+                {
+                    RelativePath = "src/TimesheetRepository.cs",
+                    Content = "public class TimesheetRepository {}"
+                }
+            ]
+        };
+        state.AppliedFiles.Add("src/TimesheetRepository.cs");
+
+        GeneratedFile file = Assert.Single(ProposedFileSupport.GetFilesForComplianceValidation(state));
+        Assert.Contains("IDbStore", file.Content, StringComparison.Ordinal);
+    }
 }

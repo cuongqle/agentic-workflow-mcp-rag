@@ -1,14 +1,12 @@
 using agents_mcp_rag.Infrastructure.Compliance.DotNet;
 
-using agents_mcp_rag.Infrastructure.Compliance.DotNet;
-
 namespace agents_mcp_rag.Orchestration.Compliance;
 
 static class ComplianceContextFactory
 {
     public static ComplianceContext Create(WorkflowState state)
     {
-        var proposedFiles = ProposedFileSupport.GetAllProposedFiles(state);
+        var proposedFiles = ProposedFileSupport.GetFilesForComplianceValidation(state);
         var proposedPaths = new HashSet<string>(
             proposedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
             StringComparer.OrdinalIgnoreCase);

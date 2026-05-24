@@ -126,7 +126,7 @@ sealed partial class WorkflowOrchestrator
 
         state.Stage = WorkflowStage.Implementing;
         state.AddTimeline("Implementation started.");
-        var llmOutputQualityFindings = new List<AgentFinding>();
+        var pendingApplyRejections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var rollbackChanges = new Dictionary<string, AppliedFileChange>(StringComparer.OrdinalIgnoreCase);
 
         ImplementationScopeDetails scopeDetails = WorkflowFindingRules.ResolveImplementationScopeDetails(state);
@@ -149,20 +149,12 @@ sealed partial class WorkflowOrchestrator
 
         if (runBackend && WorkflowFindingRules.IsAgentFallback(state.Backend))
         {
-            llmOutputQualityFindings.Add(new AgentFinding
-            {
-                Severity = FindingSeverity.High,
-                Message = $"BackendDeveloperAgent LLM call failed: {state.Backend.Summary}"
-            });
+            state.AddTimeline($"Backend developer degraded: {state.Backend.Summary}");
         }
 
         if (runFrontend && WorkflowFindingRules.IsAgentFallback(state.Frontend))
         {
-            llmOutputQualityFindings.Add(new AgentFinding
-            {
-                Severity = FindingSeverity.High,
-                Message = $"FrontendDeveloperAgent LLM call failed: {state.Frontend.Summary}"
-            });
+            state.AddTimeline($"Frontend developer degraded: {state.Frontend.Summary}");
         }
 
         if (!runBackend && !runFrontend)
@@ -179,16 +171,12 @@ sealed partial class WorkflowOrchestrator
         if (WorkflowFindingRules.CountProposedImplementationFiles(state) == 0)
         {
             string reason = WorkflowFindingRules.DescribeMissingImplementationReason(runBackend, runFrontend, state);
-            llmOutputQualityFindings.Add(new AgentFinding
-            {
-                Severity = FindingSeverity.High,
-                Message = reason
-            });
             state.AddTimeline($"No generated files: {reason}");
             await _mcpAdapter.PublishStatusAsync($"No files generated — {reason}");
         }
 
         var applyResult = await GeneratedFileApplier.ApplyAsync(state);
+        WorkflowFindingRules.RecordApplyRejections(state, pendingApplyRejections, applyResult);
         state.AppliedFiles.AddRange(applyResult.AppliedFiles);
         RecordNuGetPackageChanges(state);
         if (applyResult.AppliedFiles.Count > 0)
@@ -208,26 +196,19 @@ sealed partial class WorkflowOrchestrator
         }
         if (applyResult.RejectedFiles.Count > 0)
         {
-            foreach (var rejected in applyResult.RejectedFiles)
+            foreach (ApplyIssue rejected in applyResult.RejectedFiles)
             {
-                var finding = new AgentFinding
-                {
-                    Severity = FindingSeverity.High,
-                    Message = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
-                        rejected.RelativePath,
-                        rejected.Reason)
-                };
-                llmOutputQualityFindings.Add(finding);
-                state.AddTimeline($"Generation quality finding: [High] {finding.Message}");
-                state.ComplianceIssues.Add(finding.Message);
+                state.AddTimeline(
+                    $"Generation quality finding: [High] {WorkflowFindingRules.FormatApplyRejectionComplianceIssue(rejected.RelativePath, rejected.Reason)}");
             }
+
             await _mcpAdapter.PublishStatusAsync($"Rejected {applyResult.RejectedFiles.Count} low-quality generated file(s).");
         }
 
-        await TryApplySynthesizedMissingTestsAsync(state, rollbackChanges);
+        await TryApplySynthesizedMissingTestsAsync(state, rollbackChanges, pendingApplyRejections);
 
-        var complianceFindings = ContractComplianceValidator.CollectComplianceFindings(state);
-        complianceFindings.AddRange(llmOutputQualityFindings);
+        List<AgentFinding> complianceFindings =
+            WorkflowFindingRules.CollectComplianceFindings(state, pendingApplyRejections);
         foreach (var finding in complianceFindings)
         {
             state.AddTimeline($"Compliance finding: [{finding.Severity}] {finding.Message}");
@@ -247,10 +228,9 @@ sealed partial class WorkflowOrchestrator
                     .Where(f => f.Severity is FindingSeverity.High or FindingSeverity.Blocker)
                     .ToList()
             };
-            await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
+            await RunCompilationFixLoopAsync(state, rollbackChanges, pendingApplyRejections, cancellationToken);
 
-            complianceFindings = ContractComplianceValidator.CollectComplianceFindings(state);
-            complianceFindings.AddRange(llmOutputQualityFindings);
+            complianceFindings = WorkflowFindingRules.CollectComplianceFindings(state, pendingApplyRejections);
         }
 
         if (WorkflowFindingRules.CountProposedImplementationFiles(state) == 0
@@ -271,7 +251,7 @@ sealed partial class WorkflowOrchestrator
             }
             await _mcpAdapter.PublishStatusAsync($"Build validation found {state.BuildValidation.Findings.Count} issue(s).");
 
-            await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
+            await RunCompilationFixLoopAsync(state, rollbackChanges, pendingApplyRejections, cancellationToken);
         }
         else
         {
@@ -286,11 +266,7 @@ sealed partial class WorkflowOrchestrator
         state.Stage = WorkflowStage.Auditing;
         state.AddTimeline("Audit started.");
         state.Audit = await _auditorAgent.ExecuteAsync(state, cancellationToken);
-        state.Audit.Findings.AddRange(complianceFindings);
-        if (state.BuildValidation is not null)
-        {
-            state.Audit.Findings.AddRange(state.BuildValidation.Findings);
-        }
+        TestReleasePolicySupport.RefreshComplianceAuditFindings(state, pendingApplyRejections);
         await _mcpAdapter.PublishStatusAsync("Audit completed.");
 
         while (AuditorAgent.HasBlockingFindings(state.Audit) && state.RecoveryAttemptCount < _maxRecoveryAttempts)
@@ -303,6 +279,7 @@ sealed partial class WorkflowOrchestrator
             await _mcpAdapter.PublishStatusAsync($"Recovery attempt {state.RecoveryAttemptCount} completed.");
 
             var recoveredResult = await GeneratedFileApplier.ApplyAsync(state);
+            WorkflowFindingRules.RecordApplyRejections(state, pendingApplyRejections, recoveredResult);
             state.AppliedFiles.AddRange(recoveredResult.AppliedFiles);
             RecordNuGetPackageChanges(state);
             if (recoveredResult.AppliedFiles.Count > 0)
@@ -317,19 +294,12 @@ sealed partial class WorkflowOrchestrator
             }
             if (recoveredResult.RejectedFiles.Count > 0)
             {
-                foreach (var rejected in recoveredResult.RejectedFiles)
+                foreach (ApplyIssue rejected in recoveredResult.RejectedFiles)
                 {
-                    var finding = new AgentFinding
-                    {
-                        Severity = FindingSeverity.High,
-                        Message = WorkflowFindingRules.FormatApplyRejectionComplianceIssue(
-                            rejected.RelativePath,
-                            rejected.Reason)
-                    };
-                    llmOutputQualityFindings.Add(finding);
-                    state.AddTimeline($"Recovery quality finding: [High] {finding.Message}");
-                    state.ComplianceIssues.Add(finding.Message);
+                    state.AddTimeline(
+                        $"Recovery quality finding: [High] {WorkflowFindingRules.FormatApplyRejectionComplianceIssue(rejected.RelativePath, rejected.Reason)}");
                 }
+
                 await _mcpAdapter.PublishStatusAsync($"Rejected {recoveredResult.RejectedFiles.Count} low-quality recovery file(s).");
             }
 
@@ -350,20 +320,13 @@ sealed partial class WorkflowOrchestrator
 
             if (WorkflowFindingRules.HasUnresolvedCompilationProblems(state))
             {
-                await RunCompilationFixLoopAsync(state, rollbackChanges, cancellationToken);
+                await RunCompilationFixLoopAsync(state, rollbackChanges, pendingApplyRejections, cancellationToken);
             }
 
             state.Stage = WorkflowStage.Auditing;
             state.AddTimeline($"Re-audit after recovery attempt {state.RecoveryAttemptCount}.");
             state.Audit = await _auditorAgent.ExecuteAsync(state, cancellationToken);
-            var postRecoveryCompliance = ContractComplianceValidator.CollectComplianceFindings(state);
-            postRecoveryCompliance.AddRange(llmOutputQualityFindings);
-            foreach (var finding in postRecoveryCompliance)
-            {
-                state.ComplianceIssues.Add($"[{finding.Severity}] {finding.Message}");
-            }
-            state.Audit.Findings.AddRange(postRecoveryCompliance);
-            state.Audit.Findings.AddRange(state.BuildValidation.Findings);
+            TestReleasePolicySupport.RefreshComplianceAuditFindings(state, pendingApplyRejections);
         }
 
         TestReleasePolicySupport.ApplyReleasePolicy(state);
@@ -376,8 +339,9 @@ sealed partial class WorkflowOrchestrator
                 _buildValidationAgent.ExecuteAsync,
                 _mcpAdapter.PublishStatusAsync,
                 cancellationToken);
-            TestReleasePolicySupport.RefreshComplianceAuditFindings(state, llmOutputQualityFindings);
         }
+
+        TestReleasePolicySupport.RefreshComplianceAuditFindings(state, pendingApplyRejections);
 
         if (AuditorAgent.HasBlockingFindings(state.Audit))
         {

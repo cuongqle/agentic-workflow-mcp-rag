@@ -4,7 +4,8 @@ sealed partial class WorkflowOrchestrator
 {
     private async Task TryApplySynthesizedMissingTestsAsync(
         WorkflowState state,
-        Dictionary<string, AppliedFileChange> rollbackChanges)
+        Dictionary<string, AppliedFileChange> rollbackChanges,
+        Dictionary<string, string> pendingApplyRejections)
     {
         if (!RepoStack.From(state).DotNet)
         {
@@ -31,6 +32,7 @@ sealed partial class WorkflowOrchestrator
         await _mcpAdapter.PublishStatusAsync($"Synthesized {synthesized.Count} missing unit test file(s).");
 
         ApplyResult synthApply = await GeneratedFileApplier.ApplyAsync(state);
+        WorkflowFindingRules.RecordApplyRejections(state, pendingApplyRejections, synthApply);
         state.AppliedFiles.AddRange(synthApply.AppliedFiles);
         RecordNuGetPackageChanges(state);
         if (synthApply.AppliedFiles.Count > 0)

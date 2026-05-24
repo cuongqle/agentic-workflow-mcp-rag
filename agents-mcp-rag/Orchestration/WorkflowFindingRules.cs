@@ -47,6 +47,85 @@ static class WorkflowFindingRules
     public static string FormatApplyRejectionComplianceIssue(string relativePath, string reason) =>
         $"Apply rejected '{relativePath}': {reason}";
 
+    public static void RecordApplyRejections(
+        WorkflowState state,
+        Dictionary<string, string> pending,
+        ApplyResult result)
+    {
+        foreach (string path in result.AppliedFiles)
+        {
+            pending.Remove(NormalizeRelativePath(path));
+        }
+
+        foreach (ApplyIssue rejected in result.RejectedFiles)
+        {
+            pending[NormalizeRelativePath(rejected.RelativePath)] = rejected.Reason;
+        }
+
+        state.ComplianceIssues.RemoveAll(IsApplyRejectionComplianceIssue);
+        foreach (AgentFinding finding in ToApplyRejectionFindings(pending))
+        {
+            state.ComplianceIssues.Add(finding.Message);
+        }
+    }
+
+    public static IEnumerable<AgentFinding> ToApplyRejectionFindings(Dictionary<string, string> pending) =>
+        pending
+            .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(entry => new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = FormatApplyRejectionComplianceIssue(entry.Key, entry.Value)
+            });
+
+    public static List<AgentFinding> CollectComplianceFindings(
+        WorkflowState state,
+        Dictionary<string, string> pendingApplyRejections)
+    {
+        var findings = ContractComplianceValidator.CollectComplianceFindings(state);
+        findings.AddRange(ToApplyRejectionFindings(pendingApplyRejections));
+        findings.AddRange(CollectImplementationQualityFindings(state));
+        return findings
+            .GroupBy(finding => finding.Message, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static IEnumerable<AgentFinding> CollectImplementationQualityFindings(WorkflowState state)
+    {
+        (bool runBackend, bool runFrontend) = ResolveImplementationScopeDetails(state).Scope;
+
+        if (runBackend && IsAgentFallback(state.Backend))
+        {
+            yield return new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = $"BackendDeveloperAgent LLM call failed: {state.Backend!.Summary}"
+            };
+        }
+
+        if (runFrontend && IsAgentFallback(state.Frontend))
+        {
+            yield return new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = $"FrontendDeveloperAgent LLM call failed: {state.Frontend!.Summary}"
+            };
+        }
+
+        if (CountProposedImplementationFiles(state) == 0 && state.AppliedFiles.Count == 0)
+        {
+            yield return new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = DescribeMissingImplementationReason(runBackend, runFrontend, state)
+            };
+        }
+    }
+
+    private static string NormalizeRelativePath(string path) =>
+        path.Trim().Replace('\\', '/');
+
     public static bool IsAgentFallback(AgentResult? result) =>
         result?.Summary.Contains("Fallback output because LLM call failed", StringComparison.OrdinalIgnoreCase) == true;
 

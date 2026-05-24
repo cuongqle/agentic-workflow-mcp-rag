@@ -48,17 +48,22 @@ static class TestReleasePolicySupport
 
     public static void RefreshComplianceAuditFindings(
         WorkflowState state,
-        List<AgentFinding> llmOutputQualityFindings)
+        Dictionary<string, string> pendingApplyRejections)
     {
         if (state.Audit is null)
         {
             return;
         }
 
+        var agentAdvisoryFindings = state.Audit.Findings
+            .Where(finding => finding.Severity is FindingSeverity.Low or FindingSeverity.Medium)
+            .GroupBy(finding => finding.Message, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
         state.Audit.Findings.Clear();
-        var refreshedFindings = ContractComplianceValidator.CollectComplianceFindings(state);
-        refreshedFindings.AddRange(llmOutputQualityFindings);
-        state.Audit.Findings.AddRange(refreshedFindings);
+        state.Audit.Findings.AddRange(agentAdvisoryFindings);
+        state.Audit.Findings.AddRange(WorkflowFindingRules.CollectComplianceFindings(state, pendingApplyRejections));
         if (state.BuildValidation is not null)
         {
             state.Audit.Findings.AddRange(state.BuildValidation.Findings);
