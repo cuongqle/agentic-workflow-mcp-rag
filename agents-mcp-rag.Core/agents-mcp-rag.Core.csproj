@@ -16,7 +16,11 @@
     <ItemGroup>
         <InternalsVisibleTo Include="agents-mcp-rag" />
         <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.DotNet" />
+        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.Frontend" />
         <InternalsVisibleTo Include="agents-mcp-rag.Tests" />
+        <InternalsVisibleTo Include="agents-mcp-rag.Tests.Common" />
+        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.DotNet.Tests" />
+        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.Frontend.Tests" />
     </ItemGroup>
 
 </Project>

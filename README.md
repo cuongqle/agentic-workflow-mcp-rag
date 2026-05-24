@@ -2,28 +2,36 @@
 
 Multi-agent development workflow for a **target repository**. It uses **Semantic Kernel** (OpenAI), **local hybrid RAG** (lexical + embeddings), and the **GitHub MCP server** to plan, generate, validate, audit, recover, and optionally open a pull request—all while following patterns discovered in the existing codebase.
 
-The orchestrator is **stack-aware**: it discovers repo capabilities once, then routes apply, RAG, compliance, build validation, recovery, and test-release policy through thin generic facades into **DotNet** (plug-in assembly) or **Frontend** (host) support code.
+The orchestrator is **stack-aware**: it discovers repo capabilities once, then routes apply, RAG, compliance, build validation, recovery, and test-release policy through thin generic facades into **DotNet** or **Frontend** plug-in assemblies.
 
 ## Solution layout
 
-Four projects; dependency flow is **Host → Core + PlugIns.DotNet**, **PlugIns.DotNet → Core**.
+Five projects; dependency flow is **Host → Core + PlugIns.DotNet + PlugIns.Frontend**, **PlugIns.* → Core**. Test projects mirror stack plug-ins plus a shared helpers library and host integration tests.
 
 | Project | Role |
 |---------|------|
 | **`agents-mcp-rag.Core`** | Shared contracts: `WorkflowState`, `RepoContract`, `RepoStack`, compliance/apply models, `IStackModule`, `StackModuleRegistry` |
 | **`agents-mcp-rag.PlugIns.DotNet`** | .NET stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `DotNetPluginRegistration` |
-| **`agents-mcp-rag`** | Host executable: agents, orchestrator, frontend stack, generic routers (`GeneratedFileApplier`, `RagContextComposer`, …) |
-| **`agents-mcp-rag.Tests`** | xUnit tests (`InternalsVisibleTo` from Core, host, and plug-in) |
+| **`agents-mcp-rag.PlugIns.Frontend`** | Frontend stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `FrontendPluginRegistration` |
+| **`agents-mcp-rag`** | Host executable: agents, orchestrator, generic routers (`GeneratedFileApplier`, `RagContextComposer`, …) |
+| **`agents-mcp-rag.Tests`** | Host/integration xUnit tests (`RepoStack`, cross-stack orchestration) |
+| **`agents-mcp-rag.Tests.Common`** | Shared test helpers (`TempRepo`, `WorkflowStateBuilder`, `StackModuleTestSetup`) |
+| **`agents-mcp-rag.PlugIns.DotNet.Tests`** | DotNet plug-in xUnit tests |
+| **`agents-mcp-rag.PlugIns.Frontend.Tests`** | Frontend plug-in xUnit tests |
 
 ```
 agents-mcp-rag.sln
 ├── agents-mcp-rag.Core/
 ├── agents-mcp-rag.PlugIns.DotNet/
+├── agents-mcp-rag.PlugIns.Frontend/
 ├── agents-mcp-rag/                 # host
-└── agents-mcp-rag.Tests/
+├── agents-mcp-rag.Tests.Common/
+├── agents-mcp-rag.Tests/
+├── agents-mcp-rag.PlugIns.DotNet.Tests/
+└── agents-mcp-rag.PlugIns.Frontend.Tests/
 ```
 
-Host startup registers stack modules via `StackModuleRegistration.RegisterDefaults()` → `DotNetPluginRegistration.Register()` + `FrontendStackModule`.
+Host startup registers stack modules via `StackModuleRegistration.RegisterDefaults()` → `DotNetPluginRegistration.Register()` + `FrontendPluginRegistration.Register()`.
 
 ## What it does
 
@@ -54,16 +62,16 @@ RepoContractDiscoverer.Discover(repoPath)
 
 RepoStack routes at orchestration boundaries:
   ├── ApplyContextFactory / GeneratedFileApplier     → PlugIns.DotNet (CSharpApplySupport, guards)
-  ├── RagContextComposer                             → PlugIns.DotNet/CSharpRagContextSupport + FrontendRagContextSupport
+  ├── RagContextComposer                             → PlugIns.DotNet/CSharpRagContextSupport + PlugIns.Frontend/FrontendRagContextSupport
   ├── StackModuleRegistry                            → IStackModule plug-ins (compliance + test-release per stack)
   ├── ComplianceRuleRegistry.For(stack)              → shared rules + active module compliance rules
-  ├── BuildValidationAgent                           → PlugIns.DotNet/DotNetBuildValidationSupport + FrontendBuildValidationSupport
+  ├── BuildValidationAgent                           → PlugIns.DotNet/DotNetBuildValidationSupport + PlugIns.Frontend/FrontendBuildValidationSupport
   ├── RecoveryContextSupport                         → PlugIns.DotNet/CSharpCompilationFixSupport
   └── TestReleasePolicySupport                       → composite ITestReleasePolicy from active modules
 ```
 
-| Layer | Generic (host / Core) | DotNet (`agents-mcp-rag.PlugIns.DotNet`) | Frontend (host) |
-|-------|----------------------|------------------------------------------|-----------------|
+| Layer | Generic (host / Core) | DotNet (`agents-mcp-rag.PlugIns.DotNet`) | Frontend (`agents-mcp-rag.PlugIns.Frontend`) |
+|-------|----------------------|------------------------------------------|----------------------------------------------|
 | Apply | `ApplyContentGuard`, `ApplyContext` (Core), `ApplyContextFactory`, `GeneratedFileApplier` | `CSharpApplySupport`, guards, DI merge | `FrontendApplyGuard` |
 | RAG | `RagContextComposer`, `RepoCodeFileScanner` | `CSharpRagContextSupport` | `FrontendRagContextSupport` |
 | Compliance | `ComplianceRuleRegistry`, `ComplianceContext` (Core), `ComplianceContextFactory`, `StackModuleRegistry` (Core) | `DotNetStackModule` → rules + test policy | `FrontendStackModule` → rules |
@@ -71,7 +79,7 @@ RepoStack routes at orchestration boundaries:
 | Recovery | `RecoveryContextSupport`, `WorkflowFindingRules` | `CSharpCompilationFixSupport` | proposed-files-only fallback |
 | Test release | `TestReleasePolicySupport` (composite) | `DotNetTestReleasePolicy` via module | no policy yet (null on module) |
 
-**Convention:** .NET-specific logic lives in **`agents-mcp-rag.PlugIns.DotNet`** (namespaces `*.DotNet`). Shared types and plug-in interfaces live in **Core**. Generic orchestrators stay in the **host** and route with `RepoStack` helpers (`WhenDotNet`, `WhenFrontend`, `DotNetOr`, …). See [RepoStack](#repostack) below.
+**Convention:** Stack-specific logic lives in **`agents-mcp-rag.PlugIns.DotNet`** or **`agents-mcp-rag.PlugIns.Frontend`** (namespaces `*.DotNet` / `*.Frontend`). Shared types and plug-in interfaces live in **Core**. Generic orchestrators stay in the **host** and route with `RepoStack` helpers (`WhenDotNet`, `WhenFrontend`, `DotNetOr`, …). See [RepoStack](#repostack) below.
 
 ---
 
@@ -112,19 +120,19 @@ Stack-specific compliance and test-release policy register through **`StackModul
 ApplicationHost / tests
   └── StackModuleRegistration.RegisterDefaults()
         ├── DotNetPluginRegistration.Register()  → DotNetStackModule (PlugIns.DotNet)
-        └── FrontendStackModule                   → host
+        └── FrontendPluginRegistration.Register() → FrontendStackModule (PlugIns.Frontend)
 
 ComplianceRuleRegistry.For(stack)  → shared rules + StackModuleRegistry.ComplianceRules(stack)
 TestReleasePolicySupport           → composite over StackModuleRegistry.TestReleasePolicies(stack)
 ```
 
-To add a stack: implement `IStackModule` in a new plug-in project (reference Core only), call `StackModuleRegistry.Register(module)` at host startup. Example: future `agents-mcp-rag.PlugIns.Frontend` would move `FrontendStackModule` + `FrontendComplianceRules` out of the host.
+To add a stack: implement `IStackModule` in a new plug-in project (reference Core only), call `StackModuleRegistry.Register(module)` at host startup via a `*PluginRegistration` entry point.
 
 ---
 
 ## Repository contract
 
-`RepoContractDiscoverer` scans the target repo once at startup. **`RepoContractComposer`** (host) merges per-stack discoverers — DotNet signals from **`DotNetRepoContractDiscoverer`** (plug-in), frontend from **`FrontendRepoContractDiscoverer`** (host) — into `RepoContract` (Core). **`RepoContract.Stack`** is the routing entry point.
+`RepoContractDiscoverer` scans the target repo once at startup. **`RepoContractComposer`** (host) merges per-stack discoverers — DotNet signals from **`DotNetRepoContractDiscoverer`** (PlugIns.DotNet), frontend from **`FrontendRepoContractDiscoverer`** (PlugIns.Frontend) — into `RepoContract` (Core). **`RepoContract.Stack`** is the routing entry point.
 
 | Signal | Stored on contract | Used for |
 |--------|-------------------|----------|
@@ -191,7 +199,7 @@ Edit `agents-mcp-rag/appsettings.json`:
 ```bash
 cd agents-mcp-rag
 dotnet build agents-mcp-rag.sln
-dotnet test agents-mcp-rag.Tests/agents-mcp-rag.Tests.csproj
+dotnet test
 ```
 
 Or run all tests via the solution:
@@ -200,7 +208,7 @@ Or run all tests via the solution:
 dotnet test agents-mcp-rag.sln
 ```
 
-Unit tests live in **`agents-mcp-rag.Tests`** (xUnit, namespace `agents_mcp_rag.Tests`). They cover `RepoStack` routing, repo contract discovery/composition, canonical paths, build-failure classification, workflow finding rules, compliance rule selection, test-release policy, CodeApply edge cases (including layer constructor DI injection), and build-validation skip behavior.
+Unit tests are split across **`agents-mcp-rag.Tests`** (host/integration), **`agents-mcp-rag.PlugIns.DotNet.Tests`**, and **`agents-mcp-rag.PlugIns.Frontend.Tests`**, with shared helpers in **`agents-mcp-rag.Tests.Common`**. They cover `RepoStack` routing, repo contract discovery/composition, build-failure classification (DotNet), workflow finding rules, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
 
 ### 3. Run
 
@@ -466,7 +474,7 @@ High/Blocker findings can trigger the recovery loop.
 | Check area | Location | What it enforces |
 |------------|----------|------------------|
 | Layer contracts | `PlugIns.DotNet` → `DotNetComplianceRules` | I*{Role} + implementation pairs |
-| Path conventions | Plug-in + `FrontendComplianceRules` | Controllers, indexes, frontend module layout |
+| Path conventions | PlugIns.Frontend → `FrontendComplianceRules` | Controllers, indexes, frontend module layout |
 | Missing tests | `PlugIns.DotNet` → `TestCoverageAuditor` | `*Tests.cs` per discovered layer |
 | File quality | `GeneratedFileApplier` + `CSharpApplySupport` | C# shape, interface parity, member access (when `stack.DotNet`) |
 | Package restore | `PlugIns.DotNet` → `ProjectPackageAuditor` | Missing test NuGet packages after apply |
@@ -520,6 +528,17 @@ agents-mcp-rag/
 │       ├── Compliance/DotNetComplianceRules.cs
 │       └── DotNet/CSharpCompilationFixSupport.*.cs, DotNetTestReleasePolicySupport.cs
 │
+├── agents-mcp-rag.PlugIns.Frontend/        # Frontend stack plug-in
+│   ├── FrontendPluginRegistration.cs       # entry: StackModuleRegistry.Register(FrontendStackModule)
+│   ├── Infrastructure/
+│   │   ├── CodeApply/FrontendApplyGuard.cs
+│   │   ├── BuildValidation/FrontendBuildValidationSupport.cs
+│   │   ├── Rag/FrontendRagContextSupport.cs
+│   │   └── RepoContract/FrontendRepoContractDiscoverer.cs
+│   └── Orchestration/
+│       ├── Stacks/FrontendStackModule.cs
+│       └── Compliance/FrontendComplianceRules.cs
+│
 ├── agents-mcp-rag/                         # host executable
 │   ├── Program.cs, appsettings.json
 │   ├── Application/ApplicationHost.cs
@@ -531,27 +550,24 @@ agents-mcp-rag/
 │   │   ├── TestReleasePolicySupport.cs, ContractComplianceValidator.cs
 │   │   ├── Compliance/
 │   │   │   ├── ComplianceRuleRegistry.cs, ComplianceContextFactory.cs
-│   │   │   ├── FrontendComplianceRules.cs
 │   │   │   └── Rules/                      # shared compliance rules
 │   │   └── Stacks/
-│   │       ├── StackModuleRegistration.cs
-│   │       └── Frontend/FrontendStackModule.cs
+│   │       └── StackModuleRegistration.cs
 │   ├── Agents/
 │   └── Infrastructure/
-│       ├── RepoContract/                   # RepoContractDiscoverer, RepoContractComposer, Frontend discoverer
-│       ├── Rag/RagContextComposer.cs, FrontendRagContextSupport.cs, CodebaseRagIndex.cs
+│       ├── RepoContract/                   # RepoContractDiscoverer, RepoContractComposer
+│       ├── Rag/RagContextComposer.cs, CodebaseRagIndex.cs
 │       ├── CodeApply/
 │       │   ├── ApplyContextFactory.cs, GeneratedFileApplier.cs
-│       │   └── ApplyContentGuard.cs, FrontendApplyGuard.cs
-│       ├── BuildValidation/FrontendBuildValidationSupport.cs
+│       │   └── ApplyContentGuard.cs
 │       └── Git/, Kernel/
 │
-└── agents-mcp-rag.Tests/                   # xUnit (InternalsVisibleTo)
-    ├── Helpers/                            # TempRepo, WorkflowStateBuilder, StackModuleTestSetup
+└── agents-mcp-rag.Tests/                   # host/integration xUnit
     ├── Infrastructure/
-    ├── Orchestration/
-    ├── CodeApply/
-    └── Agents/
+    └── Orchestration/
+├── agents-mcp-rag.Tests.Common/             # TempRepo, WorkflowStateBuilder, StackModuleTestSetup
+├── agents-mcp-rag.PlugIns.DotNet.Tests/
+└── agents-mcp-rag.PlugIns.Frontend.Tests/
 ```
 
 ## Configuration reference

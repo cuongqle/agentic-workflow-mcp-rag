@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <RootNamespace>agents_mcp_rag.Tests.Helpers</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="agents-mcp-rag.Tests" />
+        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.DotNet.Tests" />
+        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.Frontend.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="agents_mcp_rag.Infrastructure" />
+        <Using Include="agents_mcp_rag.Orchestration" />
+        <Using Include="agents_mcp_rag.Orchestration.Stacks" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\agents-mcp-rag\agents-mcp-rag.csproj" />
+    </ItemGroup>
+
+</Project>

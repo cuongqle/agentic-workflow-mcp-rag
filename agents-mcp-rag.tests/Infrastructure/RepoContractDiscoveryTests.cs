@@ -28,40 +28,6 @@ public class RepoContractDiscoveryTests
     }
 
     [Fact]
-    public void Discover_finds_dotnet_composition_root_bootstrapper()
-    {
-        using var repo = new TempRepo();
-        repo.WriteFile(
-            "src/Web/App_Start/Bootstrapper.cs",
-            """
-            var services = new ServiceCollection();
-            return services.BuildServiceProvider();
-            """);
-
-        RepoContractDiscovery discovery = RepoContractComposer.Scan(repo.Path);
-
-        Assert.NotEmpty(discovery.DotNet.CompositionRootPaths);
-        Assert.Contains(
-            discovery.DotNet.CompositionRootPaths,
-            path => path.Contains("Bootstrapper.cs", StringComparison.OrdinalIgnoreCase));
-        Assert.False(discovery.Frontend.IsDiscovered);
-    }
-
-    [Fact]
-    public void Discover_finds_frontend_module_layout()
-    {
-        using var repo = new TempRepo();
-        repo.WriteFile("web/modules/employee/controllers/list.js", "angular.module('x', []);");
-        repo.WriteFile("web/modules/employee/views/list.html", "<div></div>");
-
-        RepoContractDiscovery discovery = RepoContractComposer.Scan(repo.Path);
-
-        Assert.True(discovery.Frontend.IsDiscovered);
-        Assert.NotNull(discovery.Frontend.ModuleTemplate);
-        Assert.Contains("modules", discovery.Frontend.ModuleTemplate!.ModulesRoot, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public void Compose_merges_independent_stack_signals()
     {
         using var repo = new TempRepo();

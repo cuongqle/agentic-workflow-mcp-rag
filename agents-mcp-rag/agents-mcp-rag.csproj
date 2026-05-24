@@ -11,11 +11,15 @@
 
     <ItemGroup>
       <InternalsVisibleTo Include="agents-mcp-rag.Tests" />
+      <InternalsVisibleTo Include="agents-mcp-rag.Tests.Common" />
+      <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.DotNet.Tests" />
+      <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.Frontend.Tests" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\agents-mcp-rag.Core\agents-mcp-rag.Core.csproj" />
       <ProjectReference Include="..\agents-mcp-rag.PlugIns.DotNet\agents-mcp-rag.PlugIns.DotNet.csproj" />
+      <ProjectReference Include="..\agents-mcp-rag.PlugIns.Frontend\agents-mcp-rag.PlugIns.Frontend.csproj" />
     </ItemGroup>
 
     <ItemGroup>
@@ -28,6 +32,9 @@
       <Using Include="agents_mcp_rag.Infrastructure.CodeApply.DotNet" />
       <Using Include="agents_mcp_rag.Infrastructure.Rag.DotNet" />
       <Using Include="agents_mcp_rag.Infrastructure.BuildValidation.DotNet" />
+      <Using Include="agents_mcp_rag.Infrastructure.BuildValidation.Frontend" />
+      <Using Include="agents_mcp_rag.Infrastructure.CodeApply.Frontend" />
+      <Using Include="agents_mcp_rag.Infrastructure.Rag.Frontend" />
     </ItemGroup>
 
     <ItemGroup>

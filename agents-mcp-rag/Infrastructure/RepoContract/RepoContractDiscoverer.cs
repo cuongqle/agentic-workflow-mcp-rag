@@ -19,10 +19,4 @@ internal static class RepoContractDiscoverer
         RepoContractDiscovery discovery = RepoContractComposer.Scan(repoPath);
         return RepoContractComposer.Compose(repoPath, discovery);
     }
-
-    internal static string? DetectCanonicalDirectoryForFileSuffix(
-        string repoPath,
-        string fileSuffix,
-        string? preferredDirectoryName = null) =>
-        DotNetRepoContractDiscoverer.DetectCanonicalDirectoryForFileSuffix(repoPath, fileSuffix, preferredDirectoryName);
 }

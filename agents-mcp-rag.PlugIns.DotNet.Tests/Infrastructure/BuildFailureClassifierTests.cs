@@ -1,6 +1,7 @@
 using agents_mcp_rag.Infrastructure.Compliance.DotNet;
+using agents_mcp_rag.Tests.Helpers;
 
-namespace agents_mcp_rag.Tests.Infrastructure;
+namespace agents_mcp_rag.PlugIns.DotNet.Tests.Infrastructure;
 
 public class BuildFailureClassifierTests
 {

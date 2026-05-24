@@ -1,7 +1,7 @@
 using agents_mcp_rag.Infrastructure;
 using agents_mcp_rag.Tests.Helpers;
 
-namespace agents_mcp_rag.Tests.CodeApply;
+namespace agents_mcp_rag.PlugIns.DotNet.Tests.CodeApply;
 
 public class CSharpApplySupportConstructorTests
 {

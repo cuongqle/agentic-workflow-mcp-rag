@@ -10,7 +10,7 @@
     <ItemGroup>
         <InternalsVisibleTo Include="agents-mcp-rag" />
         <InternalsVisibleTo Include="agents-mcp-rag.Tests" />
-        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.DotNet.Tests" />
+        <InternalsVisibleTo Include="agents-mcp-rag.PlugIns.Frontend.Tests" />
     </ItemGroup>
 
     <ItemGroup>
@@ -23,10 +23,9 @@
         <Using Include="agents_mcp_rag.Orchestration.Compliance" />
         <Using Include="agents_mcp_rag.Orchestration.Stacks" />
         <Using Include="agents_mcp_rag.Configuration" />
-        <Using Include="agents_mcp_rag.Infrastructure.Compliance.DotNet" />
-        <Using Include="agents_mcp_rag.Infrastructure.CodeApply.DotNet" />
-        <Using Include="agents_mcp_rag.Infrastructure.Rag.DotNet" />
-        <Using Include="agents_mcp_rag.Infrastructure.BuildValidation.DotNet" />
+        <Using Include="agents_mcp_rag.Infrastructure.CodeApply.Frontend" />
+        <Using Include="agents_mcp_rag.Infrastructure.Rag.Frontend" />
+        <Using Include="agents_mcp_rag.Infrastructure.BuildValidation.Frontend" />
     </ItemGroup>
 
 </Project>

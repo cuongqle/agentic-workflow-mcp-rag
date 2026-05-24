@@ -3,14 +3,30 @@
 /// </summary>
 static class StackModuleRegistration
 {
+    private static bool _defaultsRegistered;
+    private static readonly object Gate = new();
+
     public static void RegisterDefaults()
     {
-        if (StackModuleRegistry.IsInitialized)
+        lock (Gate)
         {
-            return;
-        }
+            if (_defaultsRegistered)
+            {
+                return;
+            }
 
-        DotNetPluginRegistration.Register();
-        StackModuleRegistry.Register(new FrontendStackModule());
+            DotNetPluginRegistration.Register();
+            FrontendPluginRegistration.Register();
+            _defaultsRegistered = true;
+        }
+    }
+
+    internal static void ResetForTests()
+    {
+        lock (Gate)
+        {
+            StackModuleRegistry.Reset();
+            _defaultsRegistered = false;
+        }
     }
 }

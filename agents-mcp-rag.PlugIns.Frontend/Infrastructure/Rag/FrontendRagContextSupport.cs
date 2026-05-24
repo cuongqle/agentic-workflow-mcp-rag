@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.Rag.Frontend;
 
 /// <summary>
 /// Frontend (JS/TS/HTML) RAG context — only invoked when <see cref="RepoStack.Frontend"/>.

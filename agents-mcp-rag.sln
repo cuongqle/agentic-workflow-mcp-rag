@@ -4,9 +4,17 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.Core", "agen
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.PlugIns.DotNet", "agents-mcp-rag.PlugIns.DotNet\agents-mcp-rag.PlugIns.DotNet.csproj", "{C2D3E4F5-A6B7-8901-CDEF-123456789012}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.PlugIns.Frontend", "agents-mcp-rag.PlugIns.Frontend\agents-mcp-rag.PlugIns.Frontend.csproj", "{D3E4F5A6-B7C8-9012-DEF1-234567890123}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag", "agents-mcp-rag\agents-mcp-rag.csproj", "{F28AC032-83BF-48C6-82DE-318FF0B895D5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.Tests", "agents-mcp-rag.Tests\agents-mcp-rag.Tests.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.Tests.Common", "agents-mcp-rag.Tests.Common\agents-mcp-rag.Tests.Common.csproj", "{E4F5A6B7-C8D9-0123-EF12-345678901234}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.PlugIns.DotNet.Tests", "agents-mcp-rag.PlugIns.DotNet.Tests\agents-mcp-rag.PlugIns.DotNet.Tests.csproj", "{F5A6B7C8-D9E0-1234-F012-456789012345}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "agents-mcp-rag.PlugIns.Frontend.Tests", "agents-mcp-rag.PlugIns.Frontend.Tests\agents-mcp-rag.PlugIns.Frontend.Tests.csproj", "{A6B7C8D9-E0F1-2345-0123-567890123456}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -22,6 +30,10 @@ Global
 		{C2D3E4F5-A6B7-8901-CDEF-123456789012}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C2D3E4F5-A6B7-8901-CDEF-123456789012}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C2D3E4F5-A6B7-8901-CDEF-123456789012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D3E4F5A6-B7C8-9012-DEF1-234567890123}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D3E4F5A6-B7C8-9012-DEF1-234567890123}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D3E4F5A6-B7C8-9012-DEF1-234567890123}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D3E4F5A6-B7C8-9012-DEF1-234567890123}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F28AC032-83BF-48C6-82DE-318FF0B895D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F28AC032-83BF-48C6-82DE-318FF0B895D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F28AC032-83BF-48C6-82DE-318FF0B895D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -30,5 +42,17 @@ Global
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E4F5A6B7-C8D9-0123-EF12-345678901234}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E4F5A6B7-C8D9-0123-EF12-345678901234}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E4F5A6B7-C8D9-0123-EF12-345678901234}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E4F5A6B7-C8D9-0123-EF12-345678901234}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F5A6B7C8-D9E0-1234-F012-456789012345}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F5A6B7C8-D9E0-1234-F012-456789012345}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F5A6B7C8-D9E0-1234-F012-456789012345}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F5A6B7C8-D9E0-1234-F012-456789012345}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A6B7C8D9-E0F1-2345-0123-567890123456}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A6B7C8D9-E0F1-2345-0123-567890123456}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A6B7C8D9-E0F1-2345-0123-567890123456}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A6B7C8D9-E0F1-2345-0123-567890123456}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

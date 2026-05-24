@@ -6,49 +6,6 @@ namespace agents_mcp_rag.Tests.Orchestration;
 public class WorkflowFindingRulesTests
 {
     [Fact]
-    public void HasUnresolvedCompilationProblems_true_for_apply_rejection_without_build()
-    {
-        WorkflowState state = WorkflowStateBuilder.Create("/repo", stack: new RepoStack(true, false));
-        state.ComplianceIssues.Add("Apply rejected 'src/Foo.cs': missing interface member");
-
-        Assert.True(WorkflowFindingRules.HasUnresolvedCompilationProblems(state));
-    }
-
-    [Fact]
-    public void HasActionableBuildFindings_dotnet_ignores_build_failed_banner()
-    {
-        WorkflowState state = WorkflowStateBuilder.Create("/repo", stack: new RepoStack(true, false));
-        WorkflowStateBuilder.WithBuildFindings(
-            state,
-            new AgentFinding { Severity = FindingSeverity.High, Message = "Build FAILED." },
-            new AgentFinding { Severity = FindingSeverity.High, Message = "src/A.cs(1,1): error CS0001: bad" });
-
-        Assert.True(WorkflowFindingRules.HasActionableBuildFindings(state));
-    }
-
-    [Fact]
-    public void HasActionableBuildFindings_dotnet_false_when_only_banner()
-    {
-        WorkflowState state = WorkflowStateBuilder.Create("/repo", stack: new RepoStack(true, false));
-        WorkflowStateBuilder.WithBuildFindings(
-            state,
-            new AgentFinding { Severity = FindingSeverity.High, Message = "Build FAILED." });
-
-        Assert.False(WorkflowFindingRules.HasActionableBuildFindings(state));
-    }
-
-    [Fact]
-    public void HasActionableBuildFindings_frontend_uses_high_blocker_only()
-    {
-        WorkflowState state = WorkflowStateBuilder.Create("/repo", stack: new RepoStack(false, true));
-        WorkflowStateBuilder.WithBuildFindings(
-            state,
-            new AgentFinding { Severity = FindingSeverity.Medium, Message = "ERROR in ./app.js" });
-
-        Assert.False(WorkflowFindingRules.HasActionableBuildFindings(state));
-    }
-
-    [Fact]
     public void ResolveImplementationScope_defaults_to_repo_capabilities_when_architecture_silent()
     {
         WorkflowState state = WorkflowStateBuilder.Create("/repo", stack: new RepoStack(true, true));

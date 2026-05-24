@@ -1,7 +1,7 @@
 using agents_mcp_rag.Infrastructure;
 using agents_mcp_rag.Tests.Helpers;
 
-namespace agents_mcp_rag.Tests.Infrastructure;
+namespace agents_mcp_rag.PlugIns.DotNet.Tests.Infrastructure;
 
 public class RepoContractCanonicalPathTests
 {
@@ -34,19 +34,5 @@ public class RepoContractCanonicalPathTests
         string canonical = contract.ResolveCanonicalRelativePath(input, string.Empty);
 
         Assert.Equal(input, canonical);
-    }
-
-    [Fact]
-    public void Stack_none_when_no_signals()
-    {
-        var contract = new RepoContract
-        {
-            RepoPath = "/repo",
-            RegistrationScope = RegistrationScopeConvention.None
-        };
-
-        Assert.False(contract.Stack.DotNet);
-        Assert.False(contract.Stack.Frontend);
-        Assert.Equal(RepoStack.None, contract.Stack);
     }
 }

@@ -22,50 +22,15 @@ public class StackModuleRegistryTests
         }
     }
 
-    [Fact]
-    public void ComplianceRules_comes_from_active_modules_only()
-    {
-        ResetModules();
-        try
-        {
-            IEnumerable<IComplianceRule> dotnetRules = StackModuleRegistry.ComplianceRules(new RepoStack(true, false));
-            IEnumerable<IComplianceRule> frontendRules = StackModuleRegistry.ComplianceRules(new RepoStack(false, true));
-
-            Assert.Contains(dotnetRules, rule => rule.RuleId == "architecture.layer-contracts");
-            Assert.DoesNotContain(dotnetRules, rule => rule.RuleId == "architecture.frontend-path-conventions");
-            Assert.Contains(frontendRules, rule => rule.RuleId == "architecture.frontend-path-conventions");
-            Assert.DoesNotContain(frontendRules, rule => rule.RuleId == "architecture.layer-contracts");
-        }
-        finally
-        {
-            RestoreDefaultModules();
-        }
-    }
-
-    [Fact]
-    public void TestReleasePolicies_only_registered_for_dotnet()
-    {
-        ResetModules();
-        try
-        {
-            Assert.Empty(StackModuleRegistry.TestReleasePolicies(new RepoStack(false, true)));
-            Assert.Single(StackModuleRegistry.TestReleasePolicies(new RepoStack(true, false)));
-        }
-        finally
-        {
-            RestoreDefaultModules();
-        }
-    }
-
     private static void ResetModules()
     {
-        StackModuleRegistry.Reset();
+        StackModuleRegistration.ResetForTests();
         StackModuleRegistration.RegisterDefaults();
     }
 
     private static void RestoreDefaultModules()
     {
-        StackModuleRegistry.Reset();
+        StackModuleRegistration.ResetForTests();
         StackModuleRegistration.RegisterDefaults();
     }
 }

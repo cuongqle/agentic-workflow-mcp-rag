@@ -1,4 +1,4 @@
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.CodeApply.Frontend;
 
 /// <summary>
 /// Frontend (JS/TS/HTML) apply validation — reject invalid generated script/markup.

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 
-namespace agents_mcp_rag.Infrastructure;
+namespace agents_mcp_rag.Infrastructure.BuildValidation.Frontend;
 
 /// <summary>
 /// Frontend (npm) build validation — only invoked when <see cref="RepoStack.Frontend"/>.
