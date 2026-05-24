@@ -53,7 +53,6 @@ sealed partial class WorkflowOrchestrator
 
     public async Task<WorkflowState> RunAsync(WorkflowState state, CancellationToken cancellationToken = default)
     {
-        var prBlockers = new List<string>();
         state.AddTimeline("Workflow queued.");
         await _mcpAdapter.PublishStatusAsync($"Queued: {state.Task.Title}");
 
@@ -63,7 +62,6 @@ sealed partial class WorkflowOrchestrator
         if (WorkflowFindingRules.IsAgentFallback(requirementsResult))
         {
             state.Requirements = requirementsResult;
-            BlockPullRequest(prBlockers, "requirements agent LLM call failed");
             state.AddTimeline("Requirements intake degraded: requirements agent LLM call failed.");
             await _mcpAdapter.PublishStatusAsync("Requirements intake degraded; continuing workflow.");
         }
@@ -73,7 +71,6 @@ sealed partial class WorkflowOrchestrator
             state.RequirementsSpec = requirementsResult.RequirementsSpec ?? RequirementsSpecParser.Resolve(requirementsResult);
             if (!state.RequirementsSpec.HasAcceptanceCriteria && _acceptanceCriteriaOptions.Enabled)
             {
-                BlockPullRequest(prBlockers, "requirements output did not include acceptance criteria");
                 state.AddTimeline("Requirements issue: no acceptance criteria parsed.");
                 await _mcpAdapter.PublishStatusAsync("Requirements missing acceptance criteria; continuing workflow.");
             }
@@ -94,7 +91,6 @@ sealed partial class WorkflowOrchestrator
         if (WorkflowFindingRules.IsAgentFallback(architectureResult))
         {
             state.Architecture = architectureResult;
-            BlockPullRequest(prBlockers, "architecture agent LLM call failed");
             state.AddTimeline("Architecture planning degraded: architecture agent LLM call failed.");
             await _mcpAdapter.PublishStatusAsync("Architecture planning degraded; continuing workflow.");
         }
@@ -193,6 +189,7 @@ sealed partial class WorkflowOrchestrator
         }
 
         var applyResult = await GeneratedFileApplier.ApplyAsync(state);
+        state.AppliedFiles.AddRange(applyResult.AppliedFiles);
         RecordNuGetPackageChanges(state);
         if (applyResult.AppliedFiles.Count > 0)
         {
@@ -257,7 +254,6 @@ sealed partial class WorkflowOrchestrator
         if (WorkflowFindingRules.CountProposedImplementationFiles(state) == 0
             && applyResult.AppliedFiles.Count == 0)
         {
-            BlockPullRequest(prBlockers, "no implementation files were generated or applied");
             state.AddTimeline("Implementation issue: no files were generated or applied.");
             await _mcpAdapter.PublishStatusAsync("No files generated or applied; continuing workflow.");
         }
@@ -305,6 +301,7 @@ sealed partial class WorkflowOrchestrator
             await _mcpAdapter.PublishStatusAsync($"Recovery attempt {state.RecoveryAttemptCount} completed.");
 
             var recoveredResult = await GeneratedFileApplier.ApplyAsync(state);
+            state.AppliedFiles.AddRange(recoveredResult.AppliedFiles);
             RecordNuGetPackageChanges(state);
             if (recoveredResult.AppliedFiles.Count > 0)
             {
@@ -397,7 +394,6 @@ sealed partial class WorkflowOrchestrator
 
             if (AuditorAgent.HasBlockingFindings(state.Audit))
             {
-                BlockPullRequest(prBlockers, "unresolved audit findings");
                 state.AddTimeline("Audit issue: unresolved blocking findings remain.");
                 await _mcpAdapter.PublishStatusAsync("Audit has blocking findings; continuing workflow.");
             }
@@ -447,7 +443,6 @@ sealed partial class WorkflowOrchestrator
             if (AcceptanceCriteriaGate.HasBlockingFailures(mergedReport)
                 || WorkflowFindingRules.HasBlockingFindings(gateFindings))
             {
-                BlockPullRequest(prBlockers, "acceptance criteria gate failed");
                 state.AddTimeline("Acceptance criteria issue: definition of done not satisfied.");
                 await _mcpAdapter.PublishStatusAsync("Acceptance criteria gate failed; continuing to finalize workflow.");
             }
@@ -457,7 +452,7 @@ sealed partial class WorkflowOrchestrator
             }
         }
 
-        await FinalizeWorkflowAsync(state, prBlockers, cancellationToken);
+        await FinalizeWorkflowAsync(state, cancellationToken);
         return state;
     }
 }

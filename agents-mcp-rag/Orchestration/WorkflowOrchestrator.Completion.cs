@@ -1,20 +1,55 @@
+using agents_mcp_rag.Configuration;
+
 sealed partial class WorkflowOrchestrator
 {
-    private static void BlockPullRequest(List<string> prBlockers, string reason)
+    private List<string> CollectPullRequestBlockers(WorkflowState state)
     {
-        if (string.IsNullOrWhiteSpace(reason))
+        var blockers = new List<string>();
+
+        if (state.Requirements is not null && WorkflowFindingRules.IsAgentFallback(state.Requirements))
         {
-            return;
+            blockers.Add("requirements agent LLM call failed");
+        }
+        else if (_acceptanceCriteriaOptions.Enabled
+                 && !(state.RequirementsSpec?.HasAcceptanceCriteria ?? false))
+        {
+            blockers.Add("requirements output did not include acceptance criteria");
         }
 
-        prBlockers.Add(reason);
+        if (state.Architecture is not null && WorkflowFindingRules.IsAgentFallback(state.Architecture))
+        {
+            blockers.Add("architecture agent LLM call failed");
+        }
+
+        if (state.AppliedFiles.Count == 0)
+        {
+            blockers.Add("no implementation files were generated or applied");
+        }
+
+        if (state.Audit is not null && AuditorAgent.HasBlockingFindings(state.Audit))
+        {
+            blockers.Add("unresolved audit findings");
+        }
+
+        if (_acceptanceCriteriaOptions.Enabled && state.AcceptanceCriteria is not null)
+        {
+            AcceptanceCriteriaReport? report = state.AcceptanceCriteria.AcceptanceCriteriaReport;
+            if ((report is not null && AcceptanceCriteriaGate.HasBlockingFailures(report))
+                || WorkflowFindingRules.HasBlockingFindings(state.AcceptanceCriteria.Findings))
+            {
+                blockers.Add("acceptance criteria gate failed");
+            }
+        }
+
+        return blockers;
     }
 
     private async Task FinalizeWorkflowAsync(
         WorkflowState state,
-        List<string> prBlockers,
         CancellationToken cancellationToken)
     {
+        List<string> prBlockers = CollectPullRequestBlockers(state);
+
         string artifactDir = await WorkflowArtifactWriter.WriteAsync(state);
         state.AddTimeline($"Artifacts written to {artifactDir}");
 

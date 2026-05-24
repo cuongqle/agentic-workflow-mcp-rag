@@ -82,6 +82,7 @@ public sealed class WorkflowState
     public HashSet<string> DeferredTestEntities { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string? PullRequestUrl { get; set; }
     public string? PullRequestStatus { get; set; }
+    public List<string> AppliedFiles { get; } = new();
 
     public List<string> Timeline { get; } = new();
 

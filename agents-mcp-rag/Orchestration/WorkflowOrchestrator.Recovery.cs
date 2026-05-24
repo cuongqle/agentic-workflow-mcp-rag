@@ -24,6 +24,7 @@ sealed partial class WorkflowOrchestrator
             state.AddTimeline($"Compilation fix attempt {attempt} output generated.");
 
             var applyResult = await GeneratedFileApplier.ApplyAsync(state);
+            state.AppliedFiles.AddRange(applyResult.AppliedFiles);
             if (applyResult.AppliedFiles.Count > 0)
             {
                 state.AddTimeline($"Compilation fix applied files: {string.Join(", ", applyResult.AppliedFiles)}");

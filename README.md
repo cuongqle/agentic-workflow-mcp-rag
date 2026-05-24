@@ -252,16 +252,13 @@ flowchart TB
 
     subgraph orchestrator [WorkflowOrchestrator]
         G --> H[RequirementsAgent]
-        H --> H1{Record PR blocker?}
-        H1 --> I[ArchitectureAgent]
-        I --> I1{Record PR blocker?}
-        I1 --> J{ResolveImplementationScope}
+        H --> I[ArchitectureAgent]
+        I --> J{ResolveImplementationScope}
         J --> K[BackendDeveloperAgent]
         J --> L[FrontendDeveloperAgent]
         K --> M[GeneratedFileApplier]
         L --> M
-        M --> M1{Record PR blocker?}
-        M1 --> N[ComplianceRuleRegistry.For stack]
+        M --> N[ComplianceRuleRegistry.For stack]
         N --> O{Blocking compliance?}
         O -->|yes| P[Recovery loop]
         O -->|no| Q[BuildValidationAgent]
@@ -274,13 +271,11 @@ flowchart TB
         U -->|yes| V[Recovery loop + re-audit]
         V --> U
         U -->|no| W[TestReleasePolicySupport]
-        W --> X{Record PR blocker?}
-        X --> Y[AcceptanceCriteriaGate]
-        Y --> Y1{Record PR blocker?}
-        Y1 --> Z[FinalizeWorkflowAsync]
-        Z --> AA{prBlockers empty?}
-        AA -->|yes| AB[GitHub PR + Done]
-        AA -->|no| AC[PR skipped + Blocked]
+        W --> X[AcceptanceCriteriaGate]
+        X --> Y[FinalizeWorkflowAsync]
+        Y --> Z{CollectPullRequestBlockers}
+        Z -->|empty| AA[GitHub PR + Done]
+        Z -->|blockers| AB[PR skipped + Blocked]
     end
 ```
 
@@ -290,7 +285,7 @@ flowchart TB
 
 Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilationProblems` — stack-aware actionable build findings plus unresolved apply rejections (not raw finding count).
 
-**Completion policy** (`WorkflowOrchestrator.Completion.cs`): the orchestrator keeps a `prBlockers` list. Agent fallbacks, missing acceptance criteria, no applied files, unresolved audit findings, and failed acceptance gate each append a blocker but **do not stop** later stages. `FinalizeWorkflowAsync` always writes the full artifact set; it creates a PR only when `prBlockers` is empty. Otherwise `Stage = Blocked` and `PullRequestStatus = "PR skipped: …"`.
+**Completion policy** (`WorkflowOrchestrator.Completion.cs`): every stage runs to completion regardless of intermediate failures. PR eligibility is decided **once** at the end by `CollectPullRequestBlockers`, which inspects final `WorkflowState` (agent fallbacks, applied files, audit findings, acceptance report). `FinalizeWorkflowAsync` always writes the full artifact set; it creates a PR only when that check returns no blockers. Otherwise `Stage = Blocked` and `PullRequestStatus = "PR skipped: …"`.
 
 ### Stage-by-stage
 
@@ -314,9 +309,9 @@ Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilati
 | **16** | `AuditorAgent` | LLM audit + merged compliance/build findings. |
 | **17** | Recovery loop | Up to `MaxRecoveryAttempts`; same recovery path as step 13. |
 | **18** | `TestReleasePolicySupport` | DotNet: quarantine failing test artifacts, downgrade test-only audit findings. |
-| **19** | Rollback (conditional) | Roll back generated changes when production build still fails after audit/recovery; records PR blocker and continues. |
+| **19** | Rollback (conditional) | Roll back generated changes when production build still fails after audit/recovery; workflow continues to acceptance gate and finalization. |
 | **20** | `AcceptanceCriteriaGate` + `AcceptanceCriteriaAgent` | Deterministic + LLM validation against requirements; writes acceptance artifacts. |
-| **21** | `FinalizeWorkflowAsync` | Full artifact set + timeline; PR via `GitHubMcpAdapter` only when no blockers. |
+| **21** | `FinalizeWorkflowAsync` | `CollectPullRequestBlockers` → full artifact set + timeline; PR only when blockers list is empty. |
 
 ### CodeApply lifecycle
 
@@ -383,18 +378,19 @@ Queued → Requirements → Planning → Implementing → Integrating → Auditi
                       or Blocked (PR skipped; all stages still ran)
 ```
 
-Stages advance even when a step records a PR blocker. `Blocked` means the workflow finished without opening a PR, not that execution stopped early.
+Stages advance even when a step fails; failures are logged on the timeline and reflected in final state. `Blocked` means the workflow finished without opening a PR, not that execution stopped early.
 
-### PR blockers
+### PR blockers (evaluated at finalization)
 
-| Condition | Recorded when |
-|-----------|---------------|
-| Requirements agent LLM fallback | Requirements intake failed |
-| No acceptance criteria parsed | Requirements spec empty (when gate enabled) |
-| Architecture agent LLM fallback | Architecture planning failed |
-| No files generated or applied | Implementation produced nothing on disk |
-| Unresolved audit findings | After recovery / test-release policy |
-| Acceptance criteria gate failed | Definition of done not satisfied |
+`CollectPullRequestBlockers` inspects final workflow state:
+| Condition | Checked from |
+|-----------|--------------|
+| Requirements agent LLM fallback | `state.Requirements` |
+| No acceptance criteria parsed | `state.RequirementsSpec` (when gate enabled) |
+| Architecture agent LLM fallback | `state.Architecture` |
+| No files generated or applied | `state.AppliedFiles` |
+| Unresolved audit findings | `state.Audit` |
+| Acceptance criteria gate failed | `state.AcceptanceCriteria` |
 
 Multiple blockers are joined in `PullRequestStatus` (e.g. `PR skipped: unresolved audit findings | acceptance criteria gate failed`).
 
