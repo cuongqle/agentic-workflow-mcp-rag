@@ -267,4 +267,16 @@ internal static class TestCoverageAuditor
     {
         return Path.GetRelativePath(repoPath, absolutePath).Replace('\\', '/');
     }
+
+    internal static bool MatchesProductionSuffixForTests(string relativePath, string productionSuffix) =>
+        MatchesProductionSuffix(relativePath, productionSuffix);
+
+    internal static string? ExtractProductionBaseNameForTests(string relativePath, string productionSuffix) =>
+        ExtractProductionBaseName(relativePath, productionSuffix);
+
+    internal static bool ProductionFileExistsForTests(string repoPath, string productionBaseName, string productionSuffix) =>
+        ProductionFileExists(repoPath, productionBaseName, productionSuffix);
+
+    internal static bool HasMatchingTestFile(WorkflowState state, string testsDir, string productionBaseName) =>
+        HasMatchingTest(state, testsDir, productionBaseName);
 }

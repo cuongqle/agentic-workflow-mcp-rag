@@ -5,46 +5,30 @@ namespace agents_mcp_rag.Infrastructure.BuildValidation.Frontend;
 
 /// <summary>
 /// Frontend (npm) build validation — only invoked when <see cref="RepoStack.Frontend"/>.
+/// Runs npm only when contract discovery found <c>package.json</c> under the initial frontend layout.
 /// </summary>
 internal static class FrontendBuildValidationSupport
 {
     public static AgentResult Validate(string repoPath, RepoContract contract)
     {
-        string? projectRoot = FindFrontendProjectRoot(repoPath, contract);
-        if (projectRoot is null)
+        string? npmProjectRoot = contract.Frontend?.NpmProjectRoot;
+        if (string.IsNullOrWhiteSpace(npmProjectRoot))
         {
-            return new AgentResult
-            {
-                AgentName = "BuildValidationAgent",
-                Summary = "No package.json found for frontend build validation.",
-                ProductionBuildPassed = null,
-                Findings =
-                {
-                    new AgentFinding
-                    {
-                        Severity = FindingSeverity.Medium,
-                        Message = "Build validation skipped: no frontend package.json detected."
-                    }
-                }
-            };
+            return Skipped(
+                "Frontend npm build validation skipped: no package.json under the discovered frontend layout.");
+        }
+
+        string projectRoot = Path.Combine(repoPath, npmProjectRoot.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(Path.Combine(projectRoot, "package.json")))
+        {
+            return Skipped(
+                $"Frontend npm build validation skipped: package.json no longer exists at {npmProjectRoot}.");
         }
 
         if (!HasBuildScript(projectRoot))
         {
-            return new AgentResult
-            {
-                AgentName = "BuildValidationAgent",
-                Summary = "Frontend package.json has no build script; validation skipped.",
-                ProductionBuildPassed = null,
-                Findings =
-                {
-                    new AgentFinding
-                    {
-                        Severity = FindingSeverity.Medium,
-                        Message = "Build validation skipped: frontend package.json has no build script."
-                    }
-                }
-            };
+            return Skipped(
+                $"Frontend npm build validation skipped: {npmProjectRoot}/package.json has no build script.");
         }
 
         string relativeRoot = Path.GetRelativePath(repoPath, projectRoot).Replace('\\', '/');
@@ -123,24 +107,15 @@ internal static class FrontendBuildValidationSupport
         return findings;
     }
 
-    private static string? FindFrontendProjectRoot(string repoPath, RepoContract contract)
-    {
-        if (contract.Frontend?.WebProjectRoot is { Length: > 0 } webRoot)
+    private static AgentResult Skipped(string summary) =>
+        new()
         {
-            string candidate = Path.Combine(repoPath, webRoot.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(Path.Combine(candidate, "package.json")))
-            {
-                return candidate;
-            }
-        }
-
-        return Directory
-            .EnumerateFiles(repoPath, "package.json", SearchOption.AllDirectories)
-            .Where(path => !IsExcludedPath(path))
-            .OrderBy(path => path.Length)
-            .Select(Path.GetDirectoryName)
-            .FirstOrDefault(dir => !string.IsNullOrWhiteSpace(dir));
-    }
+            AgentName = "BuildValidationAgent",
+            Summary = summary,
+            ProductionBuildPassed = null,
+            TestsPassed = null,
+            Findings = []
+        };
 
     private static bool HasBuildScript(string projectRoot)
     {
@@ -165,13 +140,5 @@ internal static class FrontendBuildValidationSupport
         }
 
         return false;
-    }
-
-    private static bool IsExcludedPath(string path)
-    {
-        string normalized = path.Replace('\\', '/');
-        return normalized.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("/dist/", StringComparison.OrdinalIgnoreCase)
-               || normalized.Contains("/.git/", StringComparison.OrdinalIgnoreCase);
     }
 }

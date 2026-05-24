@@ -45,7 +45,8 @@ public sealed record FrontendModuleTemplate(
     IReadOnlyList<string> ForbiddenRoots,
     IReadOnlyList<string> RequiredSubfolders,
     IReadOnlyList<string> AllowedRootFileNames,
-    IReadOnlyList<string> ExemplarFilePaths);
+    IReadOnlyList<string> ExemplarFilePaths,
+    string? NpmProjectRoot = null);
 
 public sealed class RepoContract
 {

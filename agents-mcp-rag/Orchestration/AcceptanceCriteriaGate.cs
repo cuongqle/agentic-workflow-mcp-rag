@@ -208,6 +208,8 @@ static class AcceptanceCriteriaGate
                     false => "Automated tests failed.",
                     _ => "Automated tests were not executed."
                 });
+
+                AppendRequiredTestFileEvidence(state, repoPaths, evidenceParts, ref passed, testsPassed);
             }
 
             evaluations.Add(new AcceptanceCriterionEvaluation(
@@ -237,6 +239,12 @@ static class AcceptanceCriteriaGate
         {
             foreach (AcceptanceCriterionEvaluation evaluation in llmReport.Evaluations)
             {
+                if (merged.TryGetValue(evaluation.Id, out AcceptanceCriterionEvaluation? deterministicEvaluation)
+                    && PreferDeterministicOverLlm(deterministicEvaluation, evaluation))
+                {
+                    continue;
+                }
+
                 merged[evaluation.Id] = evaluation;
             }
         }
@@ -317,4 +325,64 @@ static class AcceptanceCriteriaGate
 
         return keywords.Any(keyword => text.Contains(keyword, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static void AppendRequiredTestFileEvidence(
+        WorkflowState state,
+        HashSet<string> repoPaths,
+        List<string> evidenceParts,
+        ref bool passed,
+        bool? testsPassed)
+    {
+        IReadOnlyList<string> requiredTestPaths = MissingLayerTestSynthesizer.GetRequiredTestPaths(state);
+        if (requiredTestPaths.Count == 0)
+        {
+            return;
+        }
+
+        var presentTestPaths = new List<string>();
+        var missingTestPaths = new List<string>();
+        foreach (string path in requiredTestPaths)
+        {
+            if (repoPaths.Contains(NormalizePath(path)))
+            {
+                presentTestPaths.Add(path);
+            }
+            else
+            {
+                missingTestPaths.Add(path);
+            }
+        }
+
+        if (presentTestPaths.Count > 0)
+        {
+            evidenceParts.Add($"Required test files on disk: {string.Join(", ", presentTestPaths)}.");
+        }
+
+        if (missingTestPaths.Count > 0)
+        {
+            evidenceParts.Add($"Missing required test files: {string.Join(", ", missingTestPaths)}.");
+            if (testsPassed != true)
+            {
+                passed = false;
+            }
+        }
+    }
+
+    private static bool PreferDeterministicOverLlm(
+        AcceptanceCriterionEvaluation deterministic,
+        AcceptanceCriterionEvaluation llm)
+    {
+        if (!string.Equals(deterministic.Source, "deterministic", StringComparison.OrdinalIgnoreCase)
+            || !deterministic.Passed
+            || llm.Passed)
+        {
+            return false;
+        }
+
+        return HasAuthoritativeBuildOrTestEvidence(deterministic.Evidence);
+    }
+
+    internal static bool HasAuthoritativeBuildOrTestEvidence(string evidence) =>
+        evidence.Contains("Automated tests passed.", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("Production build passed.", StringComparison.OrdinalIgnoreCase);
 }

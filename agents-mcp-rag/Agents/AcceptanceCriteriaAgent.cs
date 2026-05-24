@@ -69,9 +69,18 @@ sealed class AcceptanceCriteriaAgent : LlmWorkflowAgentBase
             ? "(none)"
             : string.Join("\n", requirements.AcceptanceCriteria.Select(criterion => $"- {criterion.Id}: {criterion.Description}"));
 
-        string appliedFiles = string.Join(
+        string appliedFiles = state.AppliedFiles.Count == 0
+            ? "(none)"
+            : string.Join(", ", state.AppliedFiles);
+
+        string proposedFiles = string.Join(
             ", ",
             WorkflowFindingRules.GetAllProposedFiles(state).Select(file => file.RelativePath));
+
+        IReadOnlyList<string> requiredTestPaths = MissingLayerTestSynthesizer.GetRequiredTestPaths(state);
+        string requiredTestPathsList = requiredTestPaths.Count == 0
+            ? "(none)"
+            : string.Join(", ", requiredTestPaths);
 
         return $"""
             You are the acceptance criteria agent.
@@ -103,13 +112,21 @@ sealed class AcceptanceCriteriaAgent : LlmWorkflowAgentBase
             Audit summary:
             {state.Audit?.Summary}
 
-            Generated/applied file paths:
+            Applied file paths (written to disk during workflow):
             {appliedFiles}
+
+            Proposed/generated file paths:
+            {proposedFiles}
+
+            Required test file paths (from repo conventions and architecture):
+            {requiredTestPathsList}
 
             Rules:
             - Evaluate every listed acceptance criterion by id.
+            - When Tests passed is True, any criterion about unit tests passing MUST be marked passed=true.
+            - Do not fail test-related criteria solely because the audit mentions missing tests when build validation reports Tests passed: True.
             - Mark passed=false when evidence is missing, ambiguous, or contradicted by build/audit summaries.
-            - Use deterministic build/test outcomes as strong evidence.
+            - Use deterministic build/test outcomes as authoritative evidence over audit narrative.
             - Return JSON only.
 
             {JsonOutputSchema}

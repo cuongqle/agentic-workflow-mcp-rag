@@ -115,6 +115,8 @@ internal static class FrontendRepoContractDiscoverer
 
         FrontendLayoutMode layoutMode = DetectFrontendLayoutMode(modulesAbsolute);
 
+        string? npmProjectRoot = DiscoverNpmProjectRoot(repoPath, webProjectRoot, best.ModulesRoot);
+
         return new FrontendModuleTemplate(
             best.ModulesRoot,
             webProjectRoot,
@@ -123,7 +125,46 @@ internal static class FrontendRepoContractDiscoverer
             forbidden,
             requiredSubfolders,
             allowedRootFiles,
-            exemplarFilePaths);
+            exemplarFilePaths,
+            npmProjectRoot);
+    }
+
+    private static string? DiscoverNpmProjectRoot(string repoPath, string webProjectRoot, string modulesRoot)
+    {
+        foreach (string relativeRoot in CandidateNpmRoots(webProjectRoot, modulesRoot))
+        {
+            string absoluteRoot = Path.Combine(repoPath, relativeRoot.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(Path.Combine(absoluteRoot, "package.json")))
+            {
+                return relativeRoot;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> CandidateNpmRoots(string webProjectRoot, string modulesRoot)
+    {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(webProjectRoot))
+        {
+            candidates.Add(webProjectRoot.Replace('\\', '/').Trim('/'));
+        }
+
+        if (!string.IsNullOrWhiteSpace(modulesRoot))
+        {
+            string normalizedModules = modulesRoot.Replace('\\', '/').Trim('/');
+            candidates.Add(normalizedModules);
+
+            string? parent = Path.GetDirectoryName(normalizedModules.Replace('/', Path.DirectorySeparatorChar))
+                ?.Replace('\\', '/');
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                candidates.Add(parent.Trim('/'));
+            }
+        }
+
+        return candidates.Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     private static FrontendLayoutMode DetectFrontendLayoutMode(string modulesAbsolute)

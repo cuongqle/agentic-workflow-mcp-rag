@@ -22,9 +22,10 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
     {
         string architecturePlan = state.Architecture?.Summary ?? string.Empty;
         var requiredPaths = WorkflowFindingRules.GetBackendPaths(state);
-        string checklist = requiredPaths.Count == 0
+        var requiredTestPaths = MissingLayerTestSynthesizer.GetRequiredTestPaths(state);
+        string checklist = requiredPaths.Count == 0 && requiredTestPaths.Count == 0
             ? "(no BACKEND_FILES paths parsed — read BACKEND_FILES from the architecture plan above)"
-            : string.Join("\n", requiredPaths.Select(path => $"- {path}"));
+            : string.Join("\n", requiredPaths.Concat(requiredTestPaths).Distinct(StringComparer.OrdinalIgnoreCase).Select(path => $"- {path}"));
 
         return $"""
             You are the backend developer agent.
@@ -42,6 +43,7 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
             Rules:
             - If there is no BACKEND_FILES section or checklist is empty, return files: [] and a short summary.
             - Otherwise implement every BACKEND_FILES entry; match responsibilities using RAG exemplars.
+            - When the checklist includes *Tests.cs paths, implement unit tests by mirroring sibling *Tests.cs exemplars from RAG.
             - Complete source only: no stubs, TODO, NotImplementedException, or placeholder comments.
 
             Unified RAG context:

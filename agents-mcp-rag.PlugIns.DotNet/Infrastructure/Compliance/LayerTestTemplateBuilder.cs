@@ -138,6 +138,10 @@ internal static class LayerTestTemplateBuilder
             AddPair(pairs, $"I{exemplarCore}{exemplarLayer}", $"I{targetCore}{targetLayer}");
             AddPair(pairs, ToCamel(exemplarCore), ToCamel(targetCore));
             AddPair(pairs, $"{exemplarCore}{exemplarLayer}", $"{targetCore}{targetLayer}");
+            AddPair(pairs, $"_{ToCamel(exemplarCore)}{exemplarLayer}", $"_{ToCamel(targetCore)}{targetLayer}");
+            AddPair(pairs, $"Persist{exemplarCore}", $"Persist{targetCore}");
+            AddPair(pairs, $"ShouldPersist{exemplarCore}", $"ShouldPersist{targetCore}");
+            AddPair(pairs, $"Insert_ShouldPersist{exemplarCore}", $"Insert_ShouldPersist{targetCore}");
             AddPair(pairs, $"new {exemplarCore}(", $"new {targetCore}(");
             AddPair(pairs, $"var {ToCamel(exemplarCore)}{exemplarLayer}", $"var {ToCamel(targetCore)}{targetLayer}");
         }

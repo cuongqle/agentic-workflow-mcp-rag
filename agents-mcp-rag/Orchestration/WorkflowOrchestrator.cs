@@ -224,6 +224,8 @@ sealed partial class WorkflowOrchestrator
             await _mcpAdapter.PublishStatusAsync($"Rejected {applyResult.RejectedFiles.Count} low-quality generated file(s).");
         }
 
+        await TryApplySynthesizedMissingTestsAsync(state, rollbackChanges);
+
         var complianceFindings = ContractComplianceValidator.CollectComplianceFindings(state);
         complianceFindings.AddRange(llmOutputQualityFindings);
         foreach (var finding in complianceFindings)
