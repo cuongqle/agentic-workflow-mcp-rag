@@ -6,23 +6,24 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
     public string Category => "architecture";
 
     public bool AppliesTo(ComplianceContext context) =>
-        !string.IsNullOrWhiteSpace(context.State.Architecture?.Summary);
+        !string.IsNullOrWhiteSpace(context.State.Architecture?.Summary)
+        || context.State.ArchitecturePlan?.HasBackendDeliverables == true
+        || context.State.ArchitecturePlan?.HasFrontendDeliverables == true;
 
     public IEnumerable<AgentFinding> Evaluate(ComplianceContext context)
     {
         var findings = new List<AgentFinding>();
-        string architectureSummary = context.State.Architecture!.Summary;
 
         ValidateArchitectureDeliverables(
             context,
-            WorkflowFindingRules.ExtractBackendPaths(architectureSummary),
+            WorkflowFindingRules.GetBackendPaths(context.State),
             context.State.Backend?.ProposedFiles,
             "BackendDeveloperAgent",
             findings);
 
         ValidateArchitectureDeliverables(
             context,
-            WorkflowFindingRules.ExtractFrontendPaths(architectureSummary),
+            WorkflowFindingRules.GetFrontendPaths(context.State),
             context.State.Frontend?.ProposedFiles,
             "FrontendDeveloperAgent",
             findings);

@@ -4,6 +4,7 @@ using agents_mcp_rag.Infrastructure;
 
 sealed partial class WorkflowOrchestrator
 {
+    private readonly RequirementsAgent _requirementsAgent;
     private readonly ArchitectureAgent _architectureAgent;
     private readonly ObserverAgent _observerAgent;
     private readonly BackendDeveloperAgent _backendDeveloperAgent;
@@ -11,12 +12,15 @@ sealed partial class WorkflowOrchestrator
     private readonly BuildValidationAgent _buildValidationAgent;
     private readonly AuditorAgent _auditorAgent;
     private readonly RecoveryAgent _recoveryAgent;
+    private readonly AcceptanceCriteriaAgent _acceptanceCriteriaAgent;
     private readonly GitHubMcpAdapter _mcpAdapter;
     private readonly int _maxRecoveryAttempts;
     private readonly int _maxCompilationFixAttempts;
     private readonly CompilationFixContextOptions _compilationFixContextOptions;
+    private readonly AcceptanceCriteriaOptions _acceptanceCriteriaOptions;
 
     public WorkflowOrchestrator(
+        RequirementsAgent requirementsAgent,
         ArchitectureAgent architectureAgent,
         ObserverAgent observerAgent,
         BackendDeveloperAgent backendDeveloperAgent,
@@ -24,11 +28,14 @@ sealed partial class WorkflowOrchestrator
         BuildValidationAgent buildValidationAgent,
         AuditorAgent auditorAgent,
         RecoveryAgent recoveryAgent,
+        AcceptanceCriteriaAgent acceptanceCriteriaAgent,
         GitHubMcpAdapter mcpAdapter,
         int maxRecoveryAttempts,
         int maxCompilationFixAttempts,
-        CompilationFixContextOptions? compilationFixContextOptions = null)
+        CompilationFixContextOptions? compilationFixContextOptions = null,
+        AcceptanceCriteriaOptions? acceptanceCriteriaOptions = null)
     {
+        _requirementsAgent = requirementsAgent;
         _architectureAgent = architectureAgent;
         _observerAgent = observerAgent;
         _backendDeveloperAgent = backendDeveloperAgent;
@@ -36,16 +43,50 @@ sealed partial class WorkflowOrchestrator
         _buildValidationAgent = buildValidationAgent;
         _auditorAgent = auditorAgent;
         _recoveryAgent = recoveryAgent;
+        _acceptanceCriteriaAgent = acceptanceCriteriaAgent;
         _mcpAdapter = mcpAdapter;
         _maxRecoveryAttempts = Math.Max(1, maxRecoveryAttempts);
         _maxCompilationFixAttempts = Math.Max(1, maxCompilationFixAttempts);
         _compilationFixContextOptions = compilationFixContextOptions ?? new CompilationFixContextOptions();
+        _acceptanceCriteriaOptions = acceptanceCriteriaOptions ?? new AcceptanceCriteriaOptions();
     }
 
     public async Task<WorkflowState> RunAsync(WorkflowState state, CancellationToken cancellationToken = default)
     {
+        var prBlockers = new List<string>();
         state.AddTimeline("Workflow queued.");
         await _mcpAdapter.PublishStatusAsync($"Queued: {state.Task.Title}");
+
+        state.Stage = WorkflowStage.Requirements;
+        state.AddTimeline("Requirements intake started.");
+        var requirementsResult = await _requirementsAgent.ExecuteAsync(state, cancellationToken);
+        if (WorkflowFindingRules.IsAgentFallback(requirementsResult))
+        {
+            state.Requirements = requirementsResult;
+            BlockPullRequest(prBlockers, "requirements agent LLM call failed");
+            state.AddTimeline("Requirements intake degraded: requirements agent LLM call failed.");
+            await _mcpAdapter.PublishStatusAsync("Requirements intake degraded; continuing workflow.");
+        }
+        else
+        {
+            state.Requirements = requirementsResult;
+            state.RequirementsSpec = requirementsResult.RequirementsSpec ?? RequirementsSpecParser.Resolve(requirementsResult);
+            if (!state.RequirementsSpec.HasAcceptanceCriteria && _acceptanceCriteriaOptions.Enabled)
+            {
+                BlockPullRequest(prBlockers, "requirements output did not include acceptance criteria");
+                state.AddTimeline("Requirements issue: no acceptance criteria parsed.");
+                await _mcpAdapter.PublishStatusAsync("Requirements missing acceptance criteria; continuing workflow.");
+            }
+
+            string requirementsArtifactDir = WorkflowArtifactWriter.WriteRequirementsArtifacts(state);
+            state.AddTimeline(
+                $"Requirements artifacts written to {requirementsArtifactDir} "
+                + $"(requirements.md, requirements.json, {state.RequirementsSpec.AcceptanceCriteria.Count} acceptance criteria).");
+            await _mcpAdapter.PublishStatusAsync("Requirements intake completed.");
+        }
+
+        state.Requirements ??= requirementsResult;
+        state.RequirementsSpec ??= requirementsResult.RequirementsSpec ?? RequirementsSpecParser.Resolve(requirementsResult);
 
         state.Stage = WorkflowStage.Planning;
         state.AddTimeline("Architecture planning started.");
@@ -53,28 +94,48 @@ sealed partial class WorkflowOrchestrator
         if (WorkflowFindingRules.IsAgentFallback(architectureResult))
         {
             state.Architecture = architectureResult;
-            state.Stage = WorkflowStage.Blocked;
-            state.AddTimeline("Workflow blocked: architecture agent LLM call failed.");
-            await _mcpAdapter.PublishStatusAsync("Workflow blocked: architecture planning failed.");
-            return state;
+            BlockPullRequest(prBlockers, "architecture agent LLM call failed");
+            state.AddTimeline("Architecture planning degraded: architecture agent LLM call failed.");
+            await _mcpAdapter.PublishStatusAsync("Architecture planning degraded; continuing workflow.");
         }
-
-        state.Architecture = WorkflowFindingRules.SanitizeArchitectureResult(architectureResult);
-        if (architectureResult.Summary.Contains("```", StringComparison.Ordinal))
+        else
         {
-            state.AddTimeline("Architecture plan sanitized (removed sample code blocks before implementation).");
+            state.Architecture = WorkflowFindingRules.SanitizeArchitectureResult(architectureResult);
+            state.ArchitecturePlan = architectureResult.ArchitecturePlan
+                                     ?? ArchitecturePlanParser.ParseMarkdown(state.Architecture.Summary);
+            if (state.ArchitecturePlan is not null
+                && (state.ArchitecturePlan.HasBackendDeliverables || state.ArchitecturePlan.HasFrontendDeliverables))
+            {
+                state.AddTimeline(
+                    $"Architecture plan parsed: backend={state.ArchitecturePlan.BackendFiles.Count} file(s), "
+                    + $"frontend={state.ArchitecturePlan.FrontendFiles.Count} file(s).");
+            }
+
+            if (architectureResult.Summary.Contains("```", StringComparison.Ordinal))
+            {
+                state.AddTimeline("Architecture plan sanitized (removed sample code blocks before implementation).");
+            }
+
+            await _mcpAdapter.PublishStatusAsync("Architecture plan completed.");
+            state.AddTimeline($"Repository layers (contract/RAG): {WorkflowFindingRules.FormatRepoCapabilities(state)}.");
+
+            string architectureArtifactDir = WorkflowArtifactWriter.WriteArchitectureArtifacts(state);
+            state.AddTimeline(
+                $"Architecture artifacts written to {architectureArtifactDir} (architecture-plan.md, architecture-plan.json).");
         }
 
-        await _mcpAdapter.PublishStatusAsync("Architecture plan completed.");
-        state.AddTimeline($"Repository layers (contract/RAG): {WorkflowFindingRules.FormatRepoCapabilities(state)}.");
+        state.Architecture ??= architectureResult;
+        state.ArchitecturePlan ??= architectureResult.ArchitecturePlan
+                                   ?? ArchitecturePlanParser.ParseMarkdown(state.Architecture?.Summary);
 
         state.Stage = WorkflowStage.Implementing;
         state.AddTimeline("Implementation started.");
         var llmOutputQualityFindings = new List<AgentFinding>();
         var rollbackChanges = new Dictionary<string, AppliedFileChange>(StringComparer.OrdinalIgnoreCase);
 
-        (bool runBackend, bool runFrontend) = WorkflowFindingRules.ResolveImplementationScope(state);
-        state.AddTimeline($"Implementation scope: backend={runBackend}, frontend={runFrontend}.");
+        ImplementationScopeDetails scopeDetails = WorkflowFindingRules.ResolveImplementationScopeDetails(state);
+        (bool runBackend, bool runFrontend) = scopeDetails.Scope;
+        state.AddTimeline(WorkflowFindingRules.FormatImplementationScopeDiagnostics(scopeDetails));
 
         Task<AgentResult> backendTask = runBackend
             ? _backendDeveloperAgent.ExecuteAsync(state, cancellationToken)
@@ -196,10 +257,9 @@ sealed partial class WorkflowOrchestrator
         if (WorkflowFindingRules.CountProposedImplementationFiles(state) == 0
             && applyResult.AppliedFiles.Count == 0)
         {
-            state.Stage = WorkflowStage.Blocked;
-            state.AddTimeline("Workflow blocked: no implementation files were generated or applied.");
-            await _mcpAdapter.PublishStatusAsync("Workflow blocked: no files generated.");
-            return state;
+            BlockPullRequest(prBlockers, "no implementation files were generated or applied");
+            state.AddTimeline("Implementation issue: no files were generated or applied.");
+            await _mcpAdapter.PublishStatusAsync("No files generated or applied; continuing workflow.");
         }
 
         state.Stage = WorkflowStage.Integrating;
@@ -337,31 +397,67 @@ sealed partial class WorkflowOrchestrator
 
             if (AuditorAgent.HasBlockingFindings(state.Audit))
             {
-                state.Stage = WorkflowStage.Blocked;
-                state.AddTimeline("Workflow blocked by unresolved audit findings.");
-                await _mcpAdapter.PublishStatusAsync("Workflow blocked.");
-                return state;
+                BlockPullRequest(prBlockers, "unresolved audit findings");
+                state.AddTimeline("Audit issue: unresolved blocking findings remain.");
+                await _mcpAdapter.PublishStatusAsync("Audit has blocking findings; continuing workflow.");
             }
         }
 
-        state.Stage = WorkflowStage.ReadyForPR;
-        state.AddTimeline("Workflow ready for PR.");
-        await _mcpAdapter.PublishStatusAsync("Workflow ready for PR.");
-        string artifactDir = await WorkflowArtifactWriter.WriteAsync(state);
-        state.AddTimeline($"Artifacts written to {artifactDir}");
-        await _mcpAdapter.PublishPullRequestAsync(state, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(state.PullRequestStatus))
+        if (_acceptanceCriteriaOptions.Enabled)
         {
-            state.AddTimeline($"PR status: {state.PullRequestStatus}");
-        }
-        if (!string.IsNullOrWhiteSpace(state.PullRequestUrl))
-        {
-            state.AddTimeline($"PR url: {state.PullRequestUrl}");
+            state.Stage = WorkflowStage.ValidatingAcceptance;
+            state.AddTimeline("Acceptance criteria gate started.");
+            await _mcpAdapter.PublishStatusAsync("Validating acceptance criteria.");
+
+            AcceptanceCriteriaReport deterministicReport =
+                AcceptanceCriteriaGate.EvaluateDeterministic(state, _acceptanceCriteriaOptions);
+            var acceptanceAgentResult = await _acceptanceCriteriaAgent.ExecuteAsync(state, cancellationToken);
+            RequirementsSpec requirements = state.RequirementsSpec ?? new RequirementsSpec();
+            AcceptanceCriteriaReport mergedReport = AcceptanceCriteriaGate.MergeReports(
+                deterministicReport,
+                acceptanceAgentResult.AcceptanceCriteriaReport,
+                requirements);
+            var gateFindings = AcceptanceCriteriaGate.ToFindings(mergedReport).ToList();
+            if (WorkflowFindingRules.IsAgentFallback(acceptanceAgentResult))
+            {
+                gateFindings.Add(new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = $"AcceptanceCriteriaAgent LLM call failed: {acceptanceAgentResult.Summary}"
+                });
+            }
+
+            state.AcceptanceCriteria = new AgentResult
+            {
+                AgentName = "AcceptanceCriteriaGate",
+                Summary = AcceptanceCriteriaReportParser.FormatReadableSummary(mergedReport),
+                AcceptanceCriteriaReport = mergedReport,
+                Findings = gateFindings
+            };
+            state.AddTimeline(AcceptanceCriteriaGate.FormatGateDiagnostics(mergedReport));
+            foreach (AgentFinding finding in gateFindings)
+            {
+                state.AddTimeline($"Acceptance gate finding: [{finding.Severity}] {finding.Message}");
+                state.ComplianceIssues.Add($"[{finding.Severity}] {finding.Message}");
+            }
+
+            string acceptanceArtifactDir = WorkflowArtifactWriter.WriteAcceptanceArtifacts(state);
+            state.AddTimeline($"Acceptance artifacts written to {acceptanceArtifactDir}.");
+
+            if (AcceptanceCriteriaGate.HasBlockingFailures(mergedReport)
+                || WorkflowFindingRules.HasBlockingFindings(gateFindings))
+            {
+                BlockPullRequest(prBlockers, "acceptance criteria gate failed");
+                state.AddTimeline("Acceptance criteria issue: definition of done not satisfied.");
+                await _mcpAdapter.PublishStatusAsync("Acceptance criteria gate failed; continuing to finalize workflow.");
+            }
+            else
+            {
+                await _mcpAdapter.PublishStatusAsync("Acceptance criteria gate passed.");
+            }
         }
 
-        state.Stage = WorkflowStage.Done;
-        state.AddTimeline("Workflow completed.");
-        await _mcpAdapter.PublishStatusAsync("Workflow completed.");
+        await FinalizeWorkflowAsync(state, prBlockers, cancellationToken);
         return state;
     }
 }

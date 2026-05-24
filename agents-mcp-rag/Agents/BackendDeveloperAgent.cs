@@ -21,7 +21,7 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
     protected override string BuildPrompt(WorkflowState state)
     {
         string architecturePlan = state.Architecture?.Summary ?? string.Empty;
-        var requiredPaths = WorkflowFindingRules.ExtractBackendPaths(architecturePlan);
+        var requiredPaths = WorkflowFindingRules.GetBackendPaths(state);
         string checklist = requiredPaths.Count == 0
             ? "(no BACKEND_FILES paths parsed — read BACKEND_FILES from the architecture plan above)"
             : string.Join("\n", requiredPaths.Select(path => $"- {path}"));

@@ -1,6 +1,8 @@
 # agents-mcp-rag
 
-Multi-agent development workflow for a **target repository**. It uses **Semantic Kernel** (OpenAI), **local hybrid RAG** (lexical + embeddings), and the **GitHub MCP server** to plan, generate, validate, audit, recover, and optionally open a pull request—all while following patterns discovered in the existing codebase.
+Multi-agent development workflow for a **target repository**. It uses **Semantic Kernel** (OpenAI), **local hybrid RAG** (lexical + embeddings), and the **GitHub MCP server** to capture requirements, plan architecture, generate code, validate builds, audit, recover, verify acceptance criteria, write artifacts, and optionally open a pull request—all while following patterns discovered in the existing codebase.
+
+The orchestrator **runs every stage to completion**; failures are recorded as PR blockers but do not stop later stages. A pull request is created only when no blockers remain.
 
 The orchestrator is **stack-aware**: it discovers repo capabilities once, then routes apply, RAG, compliance, build validation, recovery, and test-release policy through thin generic facades into **DotNet** or **Frontend** plug-in assemblies.
 
@@ -39,13 +41,16 @@ Given a task (e.g. “add a Timesheet entity like Employee”), the system:
 
 1. Discovers **RepoContract** (layers, frontend layout, DI scope, composition roots) and sets **`contract.Stack`**.
 2. Indexes and retrieves relevant code from the target repo (extensions and exemplars gated by stack).
-3. Plans architecture, then generates backend and/or frontend files in parallel (scope from architecture + contract).
-4. Applies changes with stack-aware safety gates (C# guards only when `stack.DotNet`).
-5. Runs deterministic compliance rules selected by stack (`ComplianceRuleRegistry.For(stack)`).
-6. Validates builds per stack (`.NET`: `dotnet build` / `dotnet test`; frontend: `npm run build`).
-7. Audits output and recovers from failures in a loop.
-8. For .NET repos: separates **production** vs **test** build failures so bad unit tests do not roll back good production code.
-9. Writes workflow artifacts and optionally creates a GitHub PR via MCP.
+3. Runs **requirements intake** → structured **RequirementsSpec** with acceptance criteria.
+4. Plans architecture → structured **ArchitecturePlan** (JSON with backend/frontend file lists; markdown fallback).
+5. Generates backend and/or frontend files in parallel (scope from architecture plan + contract).
+6. Applies changes with stack-aware safety gates (C# guards only when `stack.DotNet`).
+7. Runs deterministic compliance rules selected by stack (`ComplianceRuleRegistry.For(stack)`).
+8. Validates builds per stack (`.NET`: `dotnet build` / `dotnet test`; frontend: `npm run build`).
+9. Audits output and recovers from failures in a loop.
+10. For .NET repos: separates **production** vs **test** build failures so bad unit tests do not roll back good production code.
+11. Runs the **acceptance criteria gate** (deterministic checks + LLM validation against requirements).
+12. Writes workflow artifacts (always) and creates a GitHub PR via MCP **only when no blockers remain**.
 
 ---
 
@@ -185,7 +190,12 @@ Edit `agents-mcp-rag/appsettings.json`:
     "RagVectorWeight": 0.45,
     "DefaultTaskPrompt": "Your default task when no CLI args are passed.",
     "AutoCreatePullRequest": true,
-    "PullRequestBaseBranch": "main"
+    "PullRequestBaseBranch": "main",
+    "AcceptanceCriteria": {
+      "Enabled": true,
+      "MinimumCriteriaCount": 1,
+      "RequireProductionBuildPass": true
+    }
   }
 }
 ```
@@ -208,7 +218,7 @@ Or run all tests via the solution:
 dotnet test agents-mcp-rag.sln
 ```
 
-Unit tests are split across **`agents-mcp-rag.Tests`** (host/integration), **`agents-mcp-rag.PlugIns.DotNet.Tests`**, and **`agents-mcp-rag.PlugIns.Frontend.Tests`**, with shared helpers in **`agents-mcp-rag.Tests.Common`**. They cover `RepoStack` routing, repo contract discovery/composition, build-failure classification (DotNet), workflow finding rules, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
+Unit tests are split across **`agents-mcp-rag.Tests`** (host/integration), **`agents-mcp-rag.PlugIns.DotNet.Tests`**, and **`agents-mcp-rag.PlugIns.Frontend.Tests`**, with shared helpers in **`agents-mcp-rag.Tests.Common`**. They cover `RepoStack` routing, repo contract discovery/composition, build-failure classification (DotNet), workflow finding rules, architecture/requirements parsing, acceptance criteria gate, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
 
 ### 3. Run
 
@@ -241,31 +251,36 @@ flowchart TB
     end
 
     subgraph orchestrator [WorkflowOrchestrator]
-        G --> H[ArchitectureAgent]
-        H --> I{ResolveImplementationScope}
-        I --> J[BackendDeveloperAgent]
-        I --> K[FrontendDeveloperAgent]
-        J --> L[GeneratedFileApplier]
-        K --> L
-        L --> M[ComplianceRuleRegistry.For stack]
-        M --> N{Blocking compliance?}
-        N -->|yes| O[Recovery loop]
-        N -->|no| P[BuildValidationAgent]
-        O --> P
-        P --> Q{HasUnresolvedCompilationProblems?}
-        Q -->|yes| O
-        Q -->|no| R[ObserverAgent]
-        R --> S[AuditorAgent]
-        S --> T{Blocking audit?}
-        T -->|yes| U[Recovery loop + re-audit]
-        U --> T
-        T -->|no| V[TestReleasePolicySupport]
-        V --> W{Still blocked?}
-        W -->|production fail| X[Rollback all changes]
-        W -->|test-only / ok| Y[Ready for PR]
-        X --> Z[Blocked]
-        Y --> AA[Artifacts + optional GitHub PR]
-        AA --> AB[Done]
+        G --> H[RequirementsAgent]
+        H --> H1{Record PR blocker?}
+        H1 --> I[ArchitectureAgent]
+        I --> I1{Record PR blocker?}
+        I1 --> J{ResolveImplementationScope}
+        J --> K[BackendDeveloperAgent]
+        J --> L[FrontendDeveloperAgent]
+        K --> M[GeneratedFileApplier]
+        L --> M
+        M --> M1{Record PR blocker?}
+        M1 --> N[ComplianceRuleRegistry.For stack]
+        N --> O{Blocking compliance?}
+        O -->|yes| P[Recovery loop]
+        O -->|no| Q[BuildValidationAgent]
+        P --> Q
+        Q --> R{HasUnresolvedCompilationProblems?}
+        R -->|yes| P
+        R -->|no| S[ObserverAgent]
+        S --> T[AuditorAgent]
+        T --> U{Blocking audit?}
+        U -->|yes| V[Recovery loop + re-audit]
+        V --> U
+        U -->|no| W[TestReleasePolicySupport]
+        W --> X{Record PR blocker?}
+        X --> Y[AcceptanceCriteriaGate]
+        Y --> Y1{Record PR blocker?}
+        Y1 --> Z[FinalizeWorkflowAsync]
+        Z --> AA{prBlockers empty?}
+        AA -->|yes| AB[GitHub PR + Done]
+        AA -->|no| AC[PR skipped + Blocked]
     end
 ```
 
@@ -274,6 +289,8 @@ flowchart TB
 `RecoveryContextSupport.Prepare` → `RecoveryAgent` → `GeneratedFileApplier` → `RecordNuGetPackageChanges` (DotNet only) → `BuildValidationAgent` → repeat until pass or max attempts.
 
 Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilationProblems` — stack-aware actionable build findings plus unresolved apply rejections (not raw finding count).
+
+**Completion policy** (`WorkflowOrchestrator.Completion.cs`): the orchestrator keeps a `prBlockers` list. Agent fallbacks, missing acceptance criteria, no applied files, unresolved audit findings, and failed acceptance gate each append a blocker but **do not stop** later stages. `FinalizeWorkflowAsync` always writes the full artifact set; it creates a PR only when `prBlockers` is empty. Otherwise `Stage = Blocked` and `PullRequestStatus = "PR skipped: …"`.
 
 ### Stage-by-stage
 
@@ -286,18 +303,20 @@ Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilati
 | **5** | `RepoContractDiscoverer` | Discovers layout, layers, frontend template → `WorkflowState.Contract`. |
 | **6** | `CodebaseRagIndex` | Scans stack-relevant extensions; builds lexical + vector index. |
 | **7** | `RagContextComposer` | Structure + stack-specific exemplars + semantic retrieval → `CombinedRagContext`. |
-| **8** | `ArchitectureAgent` | Plan: rationale, backend/frontend tasks, test strategy. |
-| **9** | `BackendDeveloperAgent` / `FrontendDeveloperAgent` | Parallel JSON file generation (gated by `ResolveImplementationScope`). |
-| **10** | `GeneratedFileApplier` | Canonical paths, C# guards when `stack.DotNet`, writes files. |
-| **11** | `ComplianceRuleRegistry.For(stack)` | Shared + Frontend + DotNet rules → `ContractComplianceValidator`. |
-| **12** | Recovery loop | Up to `MaxCompilationFixAttempts`; context from `RecoveryContextSupport`. |
-| **13** | `BuildValidationAgent` | Routes to DotNet and/or Frontend validators; merges results. |
-| **14** | `ObserverAgent` | Integration / cross-cutting review. |
-| **15** | `AuditorAgent` | LLM audit + merged compliance/build findings. |
-| **16** | Recovery loop | Up to `MaxRecoveryAttempts`; same recovery path as step 12. |
-| **17** | `TestReleasePolicySupport` | DotNet: quarantine failing test artifacts, downgrade test-only audit findings. |
-| **18** | Final gate | Rollback only on **production** build failure; else PR path. |
-| **19** | Artifacts + `GitHubMcpAdapter` | Timeline, summaries, optional PR. |
+| **8** | `RequirementsAgent` | Task intake → `RequirementsSpec` with acceptance criteria; writes requirements artifacts. |
+| **9** | `ArchitectureAgent` | Plan → `ArchitecturePlan` JSON (backend/frontend file lists) with markdown fallback; writes architecture artifacts. |
+| **10** | `BackendDeveloperAgent` / `FrontendDeveloperAgent` | Parallel JSON file generation (gated by `ResolveImplementationScope`). |
+| **11** | `GeneratedFileApplier` | Canonical paths, C# guards when `stack.DotNet`, writes files. |
+| **12** | `ComplianceRuleRegistry.For(stack)` | Shared + Frontend + DotNet rules → `ContractComplianceValidator`. |
+| **13** | Recovery loop | Up to `MaxCompilationFixAttempts`; context from `RecoveryContextSupport`. |
+| **14** | `BuildValidationAgent` | Routes to DotNet and/or Frontend validators; merges results. |
+| **15** | `ObserverAgent` | Integration / cross-cutting review. |
+| **16** | `AuditorAgent` | LLM audit + merged compliance/build findings. |
+| **17** | Recovery loop | Up to `MaxRecoveryAttempts`; same recovery path as step 13. |
+| **18** | `TestReleasePolicySupport` | DotNet: quarantine failing test artifacts, downgrade test-only audit findings. |
+| **19** | Rollback (conditional) | Roll back generated changes when production build still fails after audit/recovery; records PR blocker and continues. |
+| **20** | `AcceptanceCriteriaGate` + `AcceptanceCriteriaAgent` | Deterministic + LLM validation against requirements; writes acceptance artifacts. |
+| **21** | `FinalizeWorkflowAsync` | Full artifact set + timeline; PR via `GitHubMcpAdapter` only when no blockers. |
 
 ### CodeApply lifecycle
 
@@ -353,16 +372,31 @@ Rejected files become compliance issues (`Apply rejected 'path': reason`) and ca
 `GeneratedFileApplier.RollbackAsync` restores or deletes files using captured `AppliedFileChange` records:
 
 - **Test quarantine (DotNet):** rolls back only failing `*Tests.cs` artifacts; keeps production code.
-- **Final block:** rolls back all tracked changes when production build still fails after audit/recovery.
+- **Final block:** rolls back all tracked changes when production build still fails after audit/recovery (PR blocker; workflow continues to acceptance gate and finalization).
 
 ### Workflow stages (`WorkflowStage`)
 
 ```
-Queued → Planning → Implementing → Integrating → Auditing
-                              ↘ Recovering (loop) ↗
-→ ReadyForPR → Done
-   or Blocked (rollback / unresolved findings)
+Queued → Requirements → Planning → Implementing → Integrating → Auditing
+                                              ↘ Recovering (loop) ↗
+→ ValidatingAcceptance → ReadyForPR → Done
+                      or Blocked (PR skipped; all stages still ran)
 ```
+
+Stages advance even when a step records a PR blocker. `Blocked` means the workflow finished without opening a PR, not that execution stopped early.
+
+### PR blockers
+
+| Condition | Recorded when |
+|-----------|---------------|
+| Requirements agent LLM fallback | Requirements intake failed |
+| No acceptance criteria parsed | Requirements spec empty (when gate enabled) |
+| Architecture agent LLM fallback | Architecture planning failed |
+| No files generated or applied | Implementation produced nothing on disk |
+| Unresolved audit findings | After recovery / test-release policy |
+| Acceptance criteria gate failed | Definition of done not satisfied |
+
+Multiple blockers are joined in `PullRequestStatus` (e.g. `PR skipped: unresolved audit findings | acceptance criteria gate failed`).
 
 ---
 
@@ -370,15 +404,44 @@ Queued → Planning → Implementing → Integrating → Auditing
 
 | Agent | Role |
 |-------|------|
-| **ArchitectureAgent** | High-level plan and task breakdown. |
+| **RequirementsAgent** | Parses the task into a structured `RequirementsSpec` with testable acceptance criteria. |
+| **ArchitectureAgent** | High-level plan → `ArchitecturePlan` JSON (backend/frontend file paths, rationale, test strategy). |
 | **BackendDeveloperAgent** | C# / API / repository / entity / test files (JSON output). |
 | **FrontendDeveloperAgent** | JS/TS/HTML/Angular-style files (JSON output). |
 | **BuildValidationAgent** | Stack router: DotNet (`dotnet build` / `dotnet test`) and/or Frontend (`npm run build`). |
 | **ObserverAgent** | Post-build integration observation. |
 | **AuditorAgent** | Release-readiness review; merges with deterministic findings. |
+| **AcceptanceCriteriaAgent** | LLM validation of each acceptance criterion against workflow state (used by the gate). |
 | **RecoveryAgent** | Fixes build/apply failures using exemplar sources + contract (stack-aware error formatting). |
 
 Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** uses `CompilationFixExemplarContext` and `CompilationFixAllowedFiles` prepared by `RecoveryContextSupport`.
+
+---
+
+## Requirements and acceptance gate
+
+### Requirements intake
+
+`RequirementsAgent` turns the task prompt into a **`RequirementsSpec`** (`agents-mcp-rag.Core/Models/RequirementsSpec.cs`):
+
+- Structured summary and scope notes
+- **`AcceptanceCriteria`** — testable definition-of-done items (parsed from agent JSON or markdown)
+
+Requirements artifacts are written immediately after intake so they remain available even if later stages fail.
+
+### Architecture plan
+
+`ArchitectureAgent` emits an **`ArchitecturePlan`** (`ArchitecturePlan.cs`) with explicit backend/frontend file paths. The orchestrator uses `GetBackendPaths(state)` / `GetFrontendPaths(state)` for implementation scope and compliance. Markdown output is still supported via `ArchitecturePlanParser`.
+
+### Acceptance criteria gate
+
+When `Workflow:AcceptanceCriteria:Enabled` is true:
+
+1. **`AcceptanceCriteriaGate.EvaluateDeterministic`** — checks criteria count, production build pass (optional), applied files, etc.
+2. **`AcceptanceCriteriaAgent`** — LLM evaluates each criterion with evidence from workflow state.
+3. Reports are merged into **`AcceptanceCriteriaReport`**; failures become PR blockers but do not skip earlier artifacts.
+
+Disable the gate with `"AcceptanceCriteria": { "Enabled": false }` in config.
 
 ---
 
@@ -486,8 +549,8 @@ Handled by `TestReleasePolicySupport` → `DotNetTestReleasePolicySupport`:
 
 | Situation | Behavior |
 |-----------|----------|
-| Production projects fail | Full rollback of generated changes → **Blocked**. |
-| Only test project fails | **Quarantine** `*Tests.cs` artifacts, defer test entity, downgrade to Medium findings, **keep production code**, continue to PR. |
+| Production projects fail | Full rollback of generated changes; **PR blocker** (workflow continues to acceptance gate and artifacts). |
+| Only test project fails | **Quarantine** `*Tests.cs` artifacts, defer test entity, downgrade to Medium findings, **keep production code**, continue toward PR if no other blockers. |
 | Production passes, tests deferred | Timeline notes deferred test gate; `DeferredTestEntities` skips future test generation pressure. |
 
 Frontend-only repos skip test quarantine (no `*Tests.cs` convention).
@@ -503,7 +566,7 @@ agents-mcp-rag/
 ├── README.md
 │
 ├── agents-mcp-rag.Core/                    # shared kernel (no stack implementations)
-│   ├── Models/WorkflowModels.cs
+│   ├── Models/WorkflowModels.cs, ArchitecturePlan.cs, RequirementsSpec.cs
 │   ├── Configuration/CompilationFixContextOptions.cs
 │   ├── Infrastructure/
 │   │   ├── RepoContract/                   # RepoContract, RepoStack, path/entity conventions
@@ -545,16 +608,18 @@ agents-mcp-rag/
 │   ├── Configuration/
 │   ├── Workflow/WorkflowRunner.cs, WorkflowResultPrinter.cs
 │   ├── Orchestration/
-│   │   ├── WorkflowOrchestrator.cs, WorkflowOrchestrator.Recovery.cs
+│   │   ├── WorkflowOrchestrator.cs, WorkflowOrchestrator.Recovery.cs, WorkflowOrchestrator.Completion.cs
 │   │   ├── WorkflowFindingRules.cs, RecoveryContextSupport.cs
+│   │   ├── AcceptanceCriteriaGate.cs, RequirementsSpecParser.cs, ArchitecturePlanParser.cs
 │   │   ├── TestReleasePolicySupport.cs, ContractComplianceValidator.cs
 │   │   ├── Compliance/
 │   │   │   ├── ComplianceRuleRegistry.cs, ComplianceContextFactory.cs
 │   │   │   └── Rules/                      # shared compliance rules
 │   │   └── Stacks/
 │   │       └── StackModuleRegistration.cs
-│   ├── Agents/
+│   ├── Agents/                             # RequirementsAgent, ArchitectureAgent, AcceptanceCriteriaAgent, …
 │   └── Infrastructure/
+│       ├── Artifacts/WorkflowArtifactWriter.cs
 │       ├── RepoContract/                   # RepoContractDiscoverer, RepoContractComposer
 │       ├── Rag/RagContextComposer.cs, CodebaseRagIndex.cs
 │       ├── CodeApply/
@@ -586,30 +651,47 @@ agents-mcp-rag/
 | `Workflow:UseHybridRag` | Enable lexical + vector retrieval. |
 | `Workflow:RagLexicalWeight` / `RagVectorWeight` | Hybrid score weights (should sum ~1). |
 | `Workflow:DefaultTaskPrompt` | Task used when no CLI args. |
-| `Workflow:AutoCreatePullRequest` | Create PR via MCP when workflow succeeds. |
+| `Workflow:AutoCreatePullRequest` | Create PR via MCP when no PR blockers remain. |
 | `Workflow:PullRequestBaseBranch` | Base branch for PR (e.g. `main`). |
+| `Workflow:AcceptanceCriteria:Enabled` | Run acceptance criteria gate before finalization. |
+| `Workflow:AcceptanceCriteria:MinimumCriteriaCount` | Minimum parsed criteria required from requirements. |
+| `Workflow:AcceptanceCriteria:RequireProductionBuildPass` | Treat failed production build as a gate failure. |
 
 ---
 
 ## Output
 
 - **Console:** Step banners, agent summaries, timeline.
-- **Artifacts:** Written under the target repo (or configured artifact path) on success.
-- **GitHub:** PR URL/status when `AutoCreatePullRequest` is enabled and the target is a git repo.
+- **Artifacts:** Written under `{target-repo}/agents-mcp-rag-output/` — incrementally after requirements, architecture, and acceptance gate; full set at finalization (always, including when PR is skipped).
+- **GitHub:** PR URL/status when `AutoCreatePullRequest` is enabled, the target is a git repo, and no PR blockers were recorded.
+
+### Artifact files
+
+| When written | Files |
+|--------------|-------|
+| After requirements | `requirements.md`, `requirements.json`, `requirements-agent.md` |
+| After architecture | `architecture-plan.md`, `architecture-plan.json`, `architecture-agent.md` |
+| After acceptance gate | `acceptance-criteria-report.md`, `acceptance-criteria-report.json`, `acceptance-criteria-agent.md` |
+| At finalization | All of the above plus `backend-plan.md`, `frontend-plan.md`, `build-validation-report.md`, `observer-report.md`, `audit-report.md`, `recovery-plan.md`, `timeline.md` |
 
 Example timeline lines:
 
 ```
+2026-05-18T09:49:18Z | Requirements intake started.
+2026-05-18T09:49:18Z | Requirements artifacts written to .../agents-mcp-rag-output (requirements.md, requirements.json, 5 acceptance criteria).
 2026-05-18T09:49:18Z | Architecture planning started.
-2026-05-18T09:49:18Z | Repository layers (contract/RAG): backend=yes, frontend=yes
+2026-05-18T09:49:18Z | Architecture plan parsed: backend=4 file(s), frontend=3 file(s).
+2026-05-18T09:49:18Z | Architecture artifacts written to .../agents-mcp-rag-output (architecture-plan.md, architecture-plan.json).
 2026-05-18T09:49:18Z | Implementation scope: backend=True, frontend=True
 2026-05-18T09:49:18Z | Generated files applied: SinglePageSample.Repository/...
-2026-05-18T09:49:18Z | Compilation fix: inlined 8 full source file(s): ...
-2026-05-18T09:49:18Z | NuGet restore: added package xunit to ...
 2026-05-18T09:49:18Z | Build passed after compilation fix attempt 1.
-2026-05-18T09:49:18Z | Quarantined 2 failing test artifact(s); production code retained.
+2026-05-18T09:49:18Z | Acceptance criteria gate started.
+2026-05-18T09:49:18Z | Acceptance artifacts written to .../agents-mcp-rag-output.
+2026-05-18T09:49:18Z | Artifacts written to .../agents-mcp-rag-output
 2026-05-18T09:49:18Z | Workflow ready for PR.
 ```
+
+When blockers exist, the timeline ends with lines such as `Pull request skipped (2 blocker(s)): unresolved audit findings | acceptance criteria gate failed` instead of `Workflow ready for PR`.
 
 ## License
 

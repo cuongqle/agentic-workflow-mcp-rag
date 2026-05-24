@@ -55,6 +55,7 @@ static class WorkflowFindingRules
         {
             AgentName = result.AgentName,
             Summary = StripArchitectureCodeBlocks(result.Summary),
+            ArchitecturePlan = result.ArchitecturePlan,
             ProposedFiles = result.ProposedFiles,
             Findings = result.Findings,
             ProductionBuildPassed = result.ProductionBuildPassed,
@@ -87,24 +88,65 @@ static class WorkflowFindingRules
         return $"backend={(hasBackend ? "yes" : "no")}, frontend={(hasFrontend ? "yes" : "no")}";
     }
 
-    public static (bool RunBackend, bool RunFrontend) ResolveImplementationScope(WorkflowState state)
+    public static IReadOnlyList<string> GetBackendPaths(WorkflowState state) =>
+        state.ArchitecturePlan?.BackendPaths.Count > 0
+            ? state.ArchitecturePlan.BackendPaths
+            : ExtractBackendPaths(state.Architecture?.Summary);
+
+    public static IReadOnlyList<string> GetFrontendPaths(WorkflowState state) =>
+        state.ArchitecturePlan?.FrontendPaths.Count > 0
+            ? state.ArchitecturePlan.FrontendPaths
+            : ExtractFrontendPaths(state.Architecture?.Summary);
+
+    public static (bool RunBackend, bool RunFrontend) ResolveImplementationScope(WorkflowState state) =>
+        ResolveImplementationScopeDetails(state).Scope;
+
+    public static ImplementationScopeDetails ResolveImplementationScopeDetails(WorkflowState state)
     {
         (bool projectHasBackend, bool projectHasFrontend) = DetectRepoCapabilities(state);
+        ArchitecturePlan? plan = state.ArchitecturePlan;
         string? architectureSummary = state.Architecture?.Summary;
-        bool needsBackend = HasArchitectureSection(architectureSummary, "BACKEND_FILES")
+
+        bool needsBackend = plan?.HasBackendDeliverables == true
+                            || HasArchitectureSection(architectureSummary, "BACKEND_FILES")
                             || ExtractBackendPaths(architectureSummary).Count > 0;
-        bool needsFrontend = HasArchitectureSection(architectureSummary, "FRONTEND_FILES")
+        bool needsFrontend = plan?.HasFrontendDeliverables == true
+                             || HasArchitectureSection(architectureSummary, "FRONTEND_FILES")
                              || ExtractFrontendPaths(architectureSummary).Count > 0;
 
-        // Architecture must list deliverables; if it omitted both sections, run every layer the repo actually has.
+        string planSource = plan?.HasBackendDeliverables == true || plan?.HasFrontendDeliverables == true
+            ? "structured-plan"
+            : needsBackend || needsFrontend
+                ? "markdown-parsed"
+                : "none";
+
         if (!needsBackend && !needsFrontend)
         {
             needsBackend = projectHasBackend;
             needsFrontend = projectHasFrontend;
+            if (projectHasBackend || projectHasFrontend)
+            {
+                planSource = "repo-fallback";
+            }
         }
 
-        return (projectHasBackend && needsBackend, projectHasFrontend && needsFrontend);
+        return new ImplementationScopeDetails(
+            Scope: (projectHasBackend && needsBackend, projectHasFrontend && needsFrontend),
+            ProjectHasBackend: projectHasBackend,
+            ProjectHasFrontend: projectHasFrontend,
+            NeedsBackend: needsBackend,
+            NeedsFrontend: needsFrontend,
+            BackendPathCount: GetBackendPaths(state).Count,
+            FrontendPathCount: GetFrontendPaths(state).Count,
+            PlanSource: planSource);
     }
+
+    public static string FormatImplementationScopeDiagnostics(ImplementationScopeDetails details) =>
+        $"Implementation scope: backend={details.Scope.RunBackend}, frontend={details.Scope.RunFrontend} "
+        + $"(repo backend={(details.ProjectHasBackend ? "yes" : "no")}, frontend={(details.ProjectHasFrontend ? "yes" : "no")}; "
+        + $"needsBackend={details.NeedsBackend}, needsFrontend={details.NeedsFrontend}; "
+        + $"deliverables backend={details.BackendPathCount}, frontend={details.FrontendPathCount}; "
+        + $"source={details.PlanSource}).";
 
     public static int CountProposedImplementationFiles(WorkflowState state) =>
         (state.Backend?.ProposedFiles.Count ?? 0) + (state.Frontend?.ProposedFiles.Count ?? 0);
@@ -144,16 +186,17 @@ static class WorkflowFindingRules
     public static IReadOnlyList<string> ExtractFrontendPaths(string? architectureSummary) =>
         ExtractArchitecturePaths(architectureSummary, ".js", ".html", ".ts", ".vue", ".cshtml");
 
-    private static bool HasArchitectureSection(string? architectureSummary, string sectionName)
+    internal static bool HasArchitectureSection(string? architectureSummary, string sectionName)
     {
         if (string.IsNullOrWhiteSpace(architectureSummary))
         {
             return false;
         }
 
+        string escaped = Regex.Escape(sectionName);
         return Regex.IsMatch(
             architectureSummary,
-            $@"(?:^|\n)\s*#*\s*{Regex.Escape(sectionName)}\s*:?",
+            $@"(?:^|\n)\s*(?:#{{1,3}}\s*|\*{{1,2}})?{escaped}(?:\*{{1,2}})?\s*:?",
             RegexOptions.IgnoreCase);
     }
 
@@ -169,9 +212,10 @@ static class WorkflowFindingRules
 
         string fileLabelPattern = $@"\bFile:\s*[`""']?([^\s`""']+(?:{extPattern}))[`""']?";
         string backtickPattern = $@"`([A-Za-z0-9_./\\-]+(?:{extPattern}))`";
-        string listLinePattern = $@"^\s*-\s*[`""']?([A-Za-z0-9_./\\-]+(?:{extPattern}))[`""']?\s*:";
+        string bulletListPattern = $@"^\s*-\s*[`""']?([A-Za-z0-9_./\\-]+(?:{extPattern}))[`""']?\s*:";
+        string numberedListPattern = $@"^\s*\d+\.\s*[`""']?([A-Za-z0-9_./\\-]+(?:{extPattern}))[`""']?\s*:";
 
-        foreach (string pattern in new[] { fileLabelPattern, backtickPattern, listLinePattern })
+        foreach (string pattern in new[] { fileLabelPattern, backtickPattern, bulletListPattern, numberedListPattern })
         {
             foreach (Match match in Regex.Matches(architectureSummary, pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline))
             {
@@ -191,3 +235,13 @@ static class WorkflowFindingRules
         }
     }
 }
+
+readonly record struct ImplementationScopeDetails(
+    (bool RunBackend, bool RunFrontend) Scope,
+    bool ProjectHasBackend,
+    bool ProjectHasFrontend,
+    bool NeedsBackend,
+    bool NeedsFrontend,
+    int BackendPathCount,
+    int FrontendPathCount,
+    string PlanSource);

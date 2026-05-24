@@ -27,6 +27,9 @@ public static class AppSettingsLoader
         double ragVectorWeight = 0.45;
         bool autoCreatePullRequest = true;
         string pullRequestBaseBranch = "main";
+        bool acceptanceCriteriaEnabled = true;
+        int acceptanceCriteriaMinimumCount = 1;
+        bool acceptanceCriteriaRequireProductionBuildPass = true;
         string defaultTaskPrompt = "Implement a new feature safely with architecture-first planning and audited delivery.";
 
         if (root.TryGetProperty("Workflow", out var workflowNode))
@@ -90,6 +93,27 @@ public static class AppSettingsLoader
             {
                 defaultTaskPrompt = defaultPromptNode.GetString()!;
             }
+
+            if (workflowNode.TryGetProperty("AcceptanceCriteria", out var acceptanceCriteriaNode))
+            {
+                if (acceptanceCriteriaNode.TryGetProperty("Enabled", out var enabledNode)
+                    && enabledNode.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    acceptanceCriteriaEnabled = enabledNode.GetBoolean();
+                }
+
+                if (acceptanceCriteriaNode.TryGetProperty("MinimumCriteriaCount", out var minimumCountNode)
+                    && minimumCountNode.TryGetInt32(out int parsedMinimumCount))
+                {
+                    acceptanceCriteriaMinimumCount = parsedMinimumCount;
+                }
+
+                if (acceptanceCriteriaNode.TryGetProperty("RequireProductionBuildPass", out var requireBuildNode)
+                    && requireBuildNode.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    acceptanceCriteriaRequireProductionBuildPass = requireBuildNode.GetBoolean();
+                }
+            }
         }
 
         if (!IsRemoteRepository(repoPath) && !Path.IsPathRooted(repoPath))
@@ -116,6 +140,12 @@ public static class AppSettingsLoader
             {
                 MaxTotalChars = compilationFixMaxContextChars,
                 MaxOptionalFiles = compilationFixMaxOptionalFiles
+            },
+            AcceptanceCriteria = new AcceptanceCriteriaOptions
+            {
+                Enabled = acceptanceCriteriaEnabled,
+                MinimumCriteriaCount = acceptanceCriteriaMinimumCount,
+                RequireProductionBuildPass = acceptanceCriteriaRequireProductionBuildPass
             }
         };
     }

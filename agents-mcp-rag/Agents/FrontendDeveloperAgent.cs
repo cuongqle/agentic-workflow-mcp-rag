@@ -21,7 +21,7 @@ sealed class FrontendDeveloperAgent : LlmWorkflowAgentBase
     protected override string BuildPrompt(WorkflowState state)
     {
         string architecturePlan = state.Architecture?.Summary ?? string.Empty;
-        var requiredPaths = WorkflowFindingRules.ExtractFrontendPaths(architecturePlan);
+        var requiredPaths = WorkflowFindingRules.GetFrontendPaths(state);
         string checklist = requiredPaths.Count == 0
             ? "(no FRONTEND_FILES paths parsed — read FRONTEND_FILES from the architecture plan above)"
             : string.Join("\n", requiredPaths.Select(path => $"- {path}"));

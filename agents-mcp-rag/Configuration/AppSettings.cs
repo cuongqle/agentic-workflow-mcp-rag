@@ -16,4 +16,5 @@ public sealed class AppSettings
     public string DefaultTaskPrompt { get; init; } = "Implement a new feature safely with architecture-first planning and audited delivery.";
     public bool AutoCreatePullRequest { get; init; } = true;
     public string PullRequestBaseBranch { get; init; } = "main";
+    public AcceptanceCriteriaOptions AcceptanceCriteria { get; init; } = new();
 }

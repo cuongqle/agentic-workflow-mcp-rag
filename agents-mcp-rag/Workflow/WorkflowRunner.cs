@@ -54,6 +54,7 @@ internal sealed class WorkflowRunner
         };
 
         var orchestrator = new WorkflowOrchestrator(
+            new RequirementsAgent(kernel),
             new ArchitectureAgent(kernel),
             new ObserverAgent(kernel),
             new BackendDeveloperAgent(kernel),
@@ -61,10 +62,12 @@ internal sealed class WorkflowRunner
             new BuildValidationAgent(),
             new AuditorAgent(kernel),
             new RecoveryAgent(kernel),
+            new AcceptanceCriteriaAgent(kernel),
             new GitHubMcpAdapter(mcpClient, settings.AutoCreatePullRequest, settings.PullRequestBaseBranch),
             settings.MaxRecoveryAttempts,
             settings.MaxCompilationFixAttempts,
-            settings.CompilationFixContext);
+            settings.CompilationFixContext,
+            settings.AcceptanceCriteria);
 
         return await orchestrator.RunAsync(workflowState, cancellationToken);
     }

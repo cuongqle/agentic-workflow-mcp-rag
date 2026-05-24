@@ -14,10 +14,12 @@ abstract class LlmWorkflowAgentBase : IWorkflowAgent
 
     public abstract string Name { get; }
 
+    protected Kernel Kernel => _kernel;
+
     protected abstract string BuildPrompt(WorkflowState state);
     protected virtual IReadOnlyList<AgentFinding> BuildFallbackFindings() => Array.Empty<AgentFinding>();
 
-    public async Task<AgentResult> ExecuteAsync(WorkflowState state, CancellationToken cancellationToken = default)
+    public virtual async Task<AgentResult> ExecuteAsync(WorkflowState state, CancellationToken cancellationToken = default)
     {
         string summary;
         List<GeneratedFile> generatedFiles = new();

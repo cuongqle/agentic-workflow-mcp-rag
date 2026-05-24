@@ -3,11 +3,13 @@ using agents_mcp_rag.Infrastructure;
 public enum WorkflowStage
 {
     Queued,
+    Requirements,
     Planning,
     Implementing,
     Integrating,
     Auditing,
     Recovering,
+    ValidatingAcceptance,
     ReadyForPR,
     Done,
     Blocked
@@ -37,6 +39,9 @@ public sealed class AgentResult
 {
     public string AgentName { get; init; } = string.Empty;
     public string Summary { get; init; } = string.Empty;
+    public ArchitecturePlan? ArchitecturePlan { get; init; }
+    public RequirementsSpec? RequirementsSpec { get; init; }
+    public AcceptanceCriteriaReport? AcceptanceCriteriaReport { get; init; }
     public List<GeneratedFile> ProposedFiles { get; init; } = new();
     public List<AgentFinding> Findings { get; init; } = new();
     public bool? ProductionBuildPassed { get; init; }
@@ -60,7 +65,11 @@ public sealed class WorkflowState
     public WorkflowStage Stage { get; set; } = WorkflowStage.Queued;
     public int RecoveryAttemptCount { get; set; }
 
+    public AgentResult? Requirements { get; set; }
+    public RequirementsSpec? RequirementsSpec { get; set; }
     public AgentResult? Architecture { get; set; }
+    public ArchitecturePlan? ArchitecturePlan { get; set; }
+    public AgentResult? AcceptanceCriteria { get; set; }
     public AgentResult? Observer { get; set; }
     public AgentResult? Backend { get; set; }
     public AgentResult? Frontend { get; set; }
