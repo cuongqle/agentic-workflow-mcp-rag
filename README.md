@@ -1,4 +1,4 @@
-# agents-mcp-rag
+# workflowX
 
 Multi-agent development workflow for a **target repository**. It uses **Semantic Kernel** (OpenAI), **local hybrid RAG** (lexical + embeddings), and the **GitHub MCP server** to capture requirements, plan architecture, generate code, validate builds, audit, recover, verify acceptance criteria, write artifacts, and optionally open a pull request—all while following patterns discovered in the existing codebase.
 
@@ -12,25 +12,25 @@ Five projects; dependency flow is **Host → Core + PlugIns.DotNet + PlugIns.Fro
 
 | Project | Role |
 |---------|------|
-| **`agents-mcp-rag.Core`** | Shared contracts: `WorkflowState`, `RepoContract`, `RepoStack`, compliance/apply models, `IStackModule`, `StackModuleRegistry` |
-| **`agents-mcp-rag.PlugIns.DotNet`** | .NET stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `DotNetPluginRegistration` |
-| **`agents-mcp-rag.PlugIns.Frontend`** | Frontend stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `FrontendPluginRegistration` |
-| **`agents-mcp-rag`** | Host executable: agents, orchestrator, generic routers (`GeneratedFileApplier`, `RagContextComposer`, …) |
-| **`agents-mcp-rag.Tests`** | Host/integration xUnit tests (`RepoStack`, cross-stack orchestration) |
-| **`agents-mcp-rag.Tests.Common`** | Shared test helpers (`TempRepo`, `WorkflowStateBuilder`, `StackModuleTestSetup`) |
-| **`agents-mcp-rag.PlugIns.DotNet.Tests`** | DotNet plug-in xUnit tests |
-| **`agents-mcp-rag.PlugIns.Frontend.Tests`** | Frontend plug-in xUnit tests |
+| **`workflowX.Core`** | Shared contracts: `WorkflowState`, `RepoContract`, `RepoStack`, compliance/apply models, `IStackModule`, `StackModuleRegistry` |
+| **`workflowX.PlugIns.DotNet`** | .NET stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `DotNetPluginRegistration` |
+| **`workflowX.PlugIns.Frontend`** | Frontend stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `FrontendPluginRegistration` |
+| **`workflowX`** | Host executable: agents, orchestrator, generic routers (`GeneratedFileApplier`, `RagContextComposer`, …) |
+| **`workflowX.Tests`** | Host/integration xUnit tests (`RepoStack`, cross-stack orchestration) |
+| **`workflowX.Tests.Common`** | Shared test helpers (`TempRepo`, `WorkflowStateBuilder`, `StackModuleTestSetup`) |
+| **`workflowX.PlugIns.DotNet.Tests`** | DotNet plug-in xUnit tests |
+| **`workflowX.PlugIns.Frontend.Tests`** | Frontend plug-in xUnit tests |
 
 ```
-agents-mcp-rag.sln
-├── agents-mcp-rag.Core/
-├── agents-mcp-rag.PlugIns.DotNet/
-├── agents-mcp-rag.PlugIns.Frontend/
-├── agents-mcp-rag/                 # host
-├── agents-mcp-rag.Tests.Common/
-├── agents-mcp-rag.Tests/
-├── agents-mcp-rag.PlugIns.DotNet.Tests/
-└── agents-mcp-rag.PlugIns.Frontend.Tests/
+workflowX.sln
+├── workflowX.Core/
+├── workflowX.PlugIns.DotNet/
+├── workflowX.PlugIns.Frontend/
+├── workflowX/                 # host
+├── workflowX.Tests.Common/
+├── workflowX.Tests/
+├── workflowX.PlugIns.DotNet.Tests/
+└── workflowX.PlugIns.Frontend.Tests/
 ```
 
 Host startup registers stack modules via `StackModuleRegistration.RegisterDefaults()` → `DotNetPluginRegistration.Register()` + `FrontendPluginRegistration.Register()`.
@@ -75,7 +75,7 @@ RepoStack routes at orchestration boundaries:
   └── TestReleasePolicySupport                       → composite ITestReleasePolicy from active modules
 ```
 
-| Layer | Generic (host / Core) | DotNet (`agents-mcp-rag.PlugIns.DotNet`) | Frontend (`agents-mcp-rag.PlugIns.Frontend`) |
+| Layer | Generic (host / Core) | DotNet (`workflowX.PlugIns.DotNet`) | Frontend (`workflowX.PlugIns.Frontend`) |
 |-------|----------------------|------------------------------------------|----------------------------------------------|
 | Apply | `ApplyContentGuard`, `ApplyContext` (Core), `ApplyContextFactory`, `GeneratedFileApplier` | `CSharpApplySupport`, guards, DI merge | `FrontendApplyGuard` |
 | RAG | `RagContextComposer`, `RepoCodeFileScanner` | `CSharpRagContextSupport` | `FrontendRagContextSupport` |
@@ -84,13 +84,13 @@ RepoStack routes at orchestration boundaries:
 | Recovery | `RecoveryContextSupport`, `WorkflowFindingRules` | `CSharpCompilationFixSupport` | proposed-files-only fallback |
 | Test release | `TestReleasePolicySupport` (composite) | `DotNetTestReleasePolicy` via module | no policy yet (null on module) |
 
-**Convention:** Stack-specific logic lives in **`agents-mcp-rag.PlugIns.DotNet`** or **`agents-mcp-rag.PlugIns.Frontend`** (namespaces `*.DotNet` / `*.Frontend`). Shared types and plug-in interfaces live in **Core**. Generic orchestrators stay in the **host** and route with `RepoStack` helpers (`WhenDotNet`, `WhenFrontend`, `DotNetOr`, …). See [RepoStack](#repostack) below.
+**Convention:** Stack-specific logic lives in **`workflowX.PlugIns.DotNet`** or **`workflowX.PlugIns.Frontend`** (namespaces `*.DotNet` / `*.Frontend`). Shared types and plug-in interfaces live in **Core**. Generic orchestrators stay in the **host** and route with `RepoStack` helpers (`WhenDotNet`, `WhenFrontend`, `DotNetOr`, …). See [RepoStack](#repostack) below.
 
 ---
 
 ## RepoStack
 
-`RepoStack` (`agents-mcp-rag.Core/Infrastructure/RepoContract/RepoStack.cs`) is a small **routing snapshot**: two booleans that say whether the discovered repo has a .NET backend and/or a frontend module layout.
+`RepoStack` (`workflowX.Core/Infrastructure/RepoContract/RepoStack.cs`) is a small **routing snapshot**: two booleans that say whether the discovered repo has a .NET backend and/or a frontend module layout.
 
 ```csharp
 readonly record struct RepoStack(bool DotNet, bool Frontend)
@@ -115,7 +115,7 @@ readonly record struct RepoStack(bool DotNet, bool Frontend)
 
 Mixed repos set both flags. Downstream code should read **`contract.Stack`** or **`RepoStack.From(state)`** and branch on `stack.DotNet` / `stack.Frontend` — not re-scan the repo or duplicate discovery heuristics. Routing boundaries are listed under [Stack-aware architecture](#stack-aware-architecture).
 
-Unit tests: `agents-mcp-rag.Tests/Infrastructure/RepoStackTests.cs`.
+Unit tests: `workflowX.Tests/Infrastructure/RepoStackTests.cs`.
 
 ### Stack plug-ins (`IStackModule`)
 
@@ -165,7 +165,7 @@ Agents and compliance checks use this contract instead of hardcoded project-spec
 
 ### 1. Configure
 
-Edit `agents-mcp-rag/appsettings.json`:
+Edit `workflowX/appsettings.json`:
 
 ```json
 {
@@ -200,36 +200,36 @@ Edit `agents-mcp-rag/appsettings.json`:
 }
 ```
 
-`Repo.Path` can be a local directory or a remote URL (`https://...`, `git@...`). Remote repos are cloned into a local cache under `~/Library/Application Support/agents-mcp-rag/repo-cache` (macOS).
+`Repo.Path` can be a local directory or a remote URL (`https://...`, `git@...`). Remote repos are cloned into a local cache under `~/Library/Application Support/workflowX/repo-cache` (macOS).
 
 > **Security:** Do not commit real API keys. Use placeholders in git and keep secrets in a local-only `appsettings.Local.json` (ignored by `.gitignore`) if needed.
 
 ### 2. Build and test
 
 ```bash
-cd agents-mcp-rag
-dotnet build agents-mcp-rag.sln
+cd workflowX
+dotnet build workflowX.sln
 dotnet test
 ```
 
 Or run all tests via the solution:
 
 ```bash
-dotnet test agents-mcp-rag.sln
+dotnet test workflowX.sln
 ```
 
-Unit tests are split across **`agents-mcp-rag.Tests`** (host/integration), **`agents-mcp-rag.PlugIns.DotNet.Tests`**, and **`agents-mcp-rag.PlugIns.Frontend.Tests`**, with shared helpers in **`agents-mcp-rag.Tests.Common`**. They cover `RepoStack` routing, repo contract discovery/composition, build-failure classification (DotNet), workflow finding rules, architecture/requirements parsing, acceptance criteria gate, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
+Unit tests are split across **`workflowX.Tests`** (host/integration), **`workflowX.PlugIns.DotNet.Tests`**, and **`workflowX.PlugIns.Frontend.Tests`**, with shared helpers in **`workflowX.Tests.Common`**. They cover `RepoStack` routing, repo contract discovery/composition, build-failure classification (DotNet), workflow finding rules, architecture/requirements parsing, acceptance criteria gate, compliance rule selection, test-release policy, CodeApply edge cases, and build-validation skip behavior.
 
 ### 3. Run
 
 ```bash
-dotnet run --project agents-mcp-rag/agents-mcp-rag.csproj
+dotnet run --project workflowX/workflowX.csproj
 ```
 
 With a custom task prompt:
 
 ```bash
-dotnet run --project agents-mcp-rag/agents-mcp-rag.csproj -- \
+dotnet run --project workflowX/workflowX.csproj -- \
   "Implement Timesheet entity with repository, Web API controller, and AngularJS files matching Employee patterns."
 ```
 
@@ -418,7 +418,7 @@ Implementation agents use `WorkflowState.CombinedRagContext`. **RecoveryAgent** 
 
 ### Requirements intake
 
-`RequirementsAgent` turns the task prompt into a **`RequirementsSpec`** (`agents-mcp-rag.Core/Models/RequirementsSpec.cs`):
+`RequirementsAgent` turns the task prompt into a **`RequirementsSpec`** (`workflowX.Core/Models/RequirementsSpec.cs`):
 
 - Structured summary and scope notes
 - **`AcceptanceCriteria`** — testable definition-of-done items (parsed from agent JSON or markdown)
@@ -556,12 +556,12 @@ Frontend-only repos skip test quarantine (no `*Tests.cs` convention).
 ## Project structure
 
 ```
-agents-mcp-rag/
-├── agents-mcp-rag.sln
+workflowX/
+├── workflowX.sln
 ├── global.json
 ├── README.md
 │
-├── agents-mcp-rag.Core/                    # shared kernel (no stack implementations)
+├── workflowX.Core/                    # shared kernel (no stack implementations)
 │   ├── Models/WorkflowModels.cs, ArchitecturePlan.cs, RequirementsSpec.cs
 │   ├── Configuration/CompilationFixContextOptions.cs
 │   ├── Infrastructure/
@@ -574,7 +574,7 @@ agents-mcp-rag/
 │       ├── Compliance/                     # IComplianceRule, ComplianceContext, FileComplianceRule
 │       └── Stacks/                         # IStackModule, ITestReleasePolicy, StackModuleRegistry
 │
-├── agents-mcp-rag.PlugIns.DotNet/          # .NET stack plug-in
+├── workflowX.PlugIns.DotNet/          # .NET stack plug-in
 │   ├── DotNetPluginRegistration.cs         # entry: StackModuleRegistry.Register(DotNetStackModule)
 │   ├── Infrastructure/
 │   │   ├── CodeApply/                      # CSharpApplySupport, guards, CompositionRootMerger
@@ -587,7 +587,7 @@ agents-mcp-rag/
 │       ├── Compliance/DotNetComplianceRules.cs
 │       └── DotNet/CSharpCompilationFixSupport.*.cs, DotNetTestReleasePolicySupport.cs
 │
-├── agents-mcp-rag.PlugIns.Frontend/        # Frontend stack plug-in
+├── workflowX.PlugIns.Frontend/        # Frontend stack plug-in
 │   ├── FrontendPluginRegistration.cs       # entry: StackModuleRegistry.Register(FrontendStackModule)
 │   ├── Infrastructure/
 │   │   ├── CodeApply/FrontendApplyGuard.cs
@@ -598,7 +598,7 @@ agents-mcp-rag/
 │       ├── Stacks/FrontendStackModule.cs
 │       └── Compliance/FrontendComplianceRules.cs
 │
-├── agents-mcp-rag/                         # host executable
+├── workflowX/                         # host executable
 │   ├── Program.cs, appsettings.json
 │   ├── Application/ApplicationHost.cs
 │   ├── Configuration/
@@ -623,12 +623,12 @@ agents-mcp-rag/
 │       │   └── ApplyContentGuard.cs
 │       └── Git/, Kernel/
 │
-└── agents-mcp-rag.Tests/                   # host/integration xUnit
+└── workflowX.Tests/                   # host/integration xUnit
     ├── Infrastructure/
     └── Orchestration/
-├── agents-mcp-rag.Tests.Common/             # TempRepo, WorkflowStateBuilder, StackModuleTestSetup
-├── agents-mcp-rag.PlugIns.DotNet.Tests/
-└── agents-mcp-rag.PlugIns.Frontend.Tests/
+├── workflowX.Tests.Common/             # TempRepo, WorkflowStateBuilder, StackModuleTestSetup
+├── workflowX.PlugIns.DotNet.Tests/
+└── workflowX.PlugIns.Frontend.Tests/
 ```
 
 ## Configuration reference
@@ -658,7 +658,7 @@ agents-mcp-rag/
 ## Output
 
 - **Console:** Step banners, agent summaries, timeline.
-- **Artifacts:** Written under `{target-repo}/agents-mcp-rag-output/` — incrementally after requirements, architecture, and acceptance gate; full set at finalization (always, including when PR is skipped).
+- **Artifacts:** Written under `{target-repo}/workflowX-output/` — incrementally after requirements, architecture, and acceptance gate; full set at finalization (always, including when PR is skipped).
 - **GitHub:** PR URL/status when `AutoCreatePullRequest` is enabled, the target is a git repo, and no PR blockers were recorded.
 
 ### Artifact files
@@ -674,16 +674,16 @@ Example timeline lines:
 
 ```
 2026-05-18T09:49:18Z | Requirements intake started.
-2026-05-18T09:49:18Z | Requirements artifacts written to .../agents-mcp-rag-output (requirements.md, requirements.json, 5 acceptance criteria).
+2026-05-18T09:49:18Z | Requirements artifacts written to .../workflowX-output (requirements.md, requirements.json, 5 acceptance criteria).
 2026-05-18T09:49:18Z | Architecture planning started.
 2026-05-18T09:49:18Z | Architecture plan parsed: backend=4 file(s), frontend=3 file(s).
-2026-05-18T09:49:18Z | Architecture artifacts written to .../agents-mcp-rag-output (architecture-plan.md, architecture-plan.json).
+2026-05-18T09:49:18Z | Architecture artifacts written to .../workflowX-output (architecture-plan.md, architecture-plan.json).
 2026-05-18T09:49:18Z | Implementation scope: backend=True, frontend=True
 2026-05-18T09:49:18Z | Generated files applied: SinglePageSample.Repository/...
 2026-05-18T09:49:18Z | Build passed after compilation fix attempt 1.
 2026-05-18T09:49:18Z | Acceptance criteria gate started.
-2026-05-18T09:49:18Z | Acceptance artifacts written to .../agents-mcp-rag-output.
-2026-05-18T09:49:18Z | Artifacts written to .../agents-mcp-rag-output
+2026-05-18T09:49:18Z | Acceptance artifacts written to .../workflowX-output.
+2026-05-18T09:49:18Z | Artifacts written to .../workflowX-output
 2026-05-18T09:49:18Z | Workflow ready for PR.
 ```
 

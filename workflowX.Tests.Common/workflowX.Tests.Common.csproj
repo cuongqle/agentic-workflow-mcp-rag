@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <RootNamespace>workflowX.Tests.Helpers</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="workflowX.Tests" />
+        <InternalsVisibleTo Include="workflowX.PlugIns.DotNet.Tests" />
+        <InternalsVisibleTo Include="workflowX.PlugIns.Frontend.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="workflowX.Infrastructure" />
+        <Using Include="workflowX.Orchestration" />
+        <Using Include="workflowX.Orchestration.Stacks" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\workflowX\workflowX.csproj" />
+    </ItemGroup>
+
+</Project>

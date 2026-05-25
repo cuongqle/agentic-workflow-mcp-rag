@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <RootNamespace>workflowX</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="workflowX" />
+        <InternalsVisibleTo Include="workflowX.Tests" />
+        <InternalsVisibleTo Include="workflowX.PlugIns.Frontend.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\workflowX.Core\workflowX.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="workflowX.Orchestration" />
+        <Using Include="workflowX.Infrastructure" />
+        <Using Include="workflowX.Orchestration.Compliance" />
+        <Using Include="workflowX.Orchestration.Stacks" />
+        <Using Include="workflowX.Configuration" />
+        <Using Include="workflowX.Infrastructure.CodeApply.Frontend" />
+        <Using Include="workflowX.Infrastructure.Rag.Frontend" />
+        <Using Include="workflowX.Infrastructure.BuildValidation.Frontend" />
+    </ItemGroup>
+
+</Project>

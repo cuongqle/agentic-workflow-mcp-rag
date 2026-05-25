@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <RootNamespace>workflowX</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <NoWarn>$(NoWarn);SKEXP0001;SKEXP0050</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <InternalsVisibleTo Include="workflowX.Tests" />
+      <InternalsVisibleTo Include="workflowX.Tests.Common" />
+      <InternalsVisibleTo Include="workflowX.PlugIns.DotNet.Tests" />
+      <InternalsVisibleTo Include="workflowX.PlugIns.Frontend.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\workflowX.Core\workflowX.Core.csproj" />
+      <ProjectReference Include="..\workflowX.PlugIns.DotNet\workflowX.PlugIns.DotNet.csproj" />
+      <ProjectReference Include="..\workflowX.PlugIns.Frontend\workflowX.PlugIns.Frontend.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Using Include="workflowX.Orchestration" />
+      <Using Include="workflowX.Infrastructure" />
+      <Using Include="workflowX.Orchestration.Compliance" />
+      <Using Include="workflowX.Orchestration.Stacks" />
+      <Using Include="workflowX.Configuration" />
+      <Using Include="workflowX.Infrastructure.Compliance.DotNet" />
+      <Using Include="workflowX.Infrastructure.CodeApply.DotNet" />
+      <Using Include="workflowX.Infrastructure.Rag.DotNet" />
+      <Using Include="workflowX.Infrastructure.BuildValidation.DotNet" />
+      <Using Include="workflowX.Infrastructure.BuildValidation.Frontend" />
+      <Using Include="workflowX.Infrastructure.CodeApply.Frontend" />
+      <Using Include="workflowX.Infrastructure.Rag.Frontend" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="LangChain" Version="0.17.1" />
+      <PackageReference Include="Microsoft.SemanticKernel" Version="1.76.0" />
+      <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.76.0" />
+      <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+      <PackageReference Include="ModelContextProtocol.Core" Version="1.3.0" />
+    </ItemGroup>
+
+</Project>
