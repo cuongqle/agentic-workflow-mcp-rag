@@ -36,7 +36,8 @@ internal static class DependencyWiringAuditor
         var proposedPaths = BuildWorkflowProposedPathSet(state);
         var requiredInterfaces = CollectWorkflowIntroducedInterfaces(
             ProposedFileSupport.GetAllProposedFiles(state),
-            proposedPaths);
+            proposedPaths,
+            repoPath);
 
         foreach (string interfaceName in requiredInterfaces)
         {
@@ -89,7 +90,8 @@ internal static class DependencyWiringAuditor
         var proposedPaths = BuildWorkflowProposedPathSet(state);
         var requiredInterfaces = CollectWorkflowIntroducedInterfaces(
             ProposedFileSupport.GetAllProposedFiles(state),
-            proposedPaths);
+            proposedPaths,
+            repoPath);
 
         foreach (string interfaceName in requiredInterfaces)
         {
@@ -120,12 +122,12 @@ internal static class DependencyWiringAuditor
                 continue;
             }
 
-            string existing = CompositionRootMerger.SanitizeBootstrapContent(File.ReadAllText(hubAbsolute));
+            string existing = CompositionRootMerger.SanitizeBootstrapContent(File.ReadAllText(hubAbsolute), repoPath);
             BootstrapRegistrationScope.BootstrapScope? scope = BootstrapRegistrationScope.DiscoverFromContent(
                 existing,
                 hub.RelativePath);
             if (!TryGetImplementationTypeName(interfaceName, out string implementationName)
-                || !IsWorkflowIntroducedRegistrationPair(interfaceName, implementationName, proposedPaths))
+                || !IsWorkflowIntroducedRegistrationPair(interfaceName, implementationName, proposedPaths, repoPath))
             {
                 continue;
             }
@@ -137,7 +139,8 @@ internal static class DependencyWiringAuditor
                     registrationLine + Environment.NewLine,
                     out string merged,
                     out _,
-                    proposedPaths))
+                    proposedPaths,
+                    repoPath))
             {
                 continue;
             }
@@ -212,7 +215,10 @@ internal static class DependencyWiringAuditor
             && relativePath.Contains("Test", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Filters lines proposed for merge — only workflow-new pairs may be added.</summary>
-    internal static bool IsAllowedNewRegistrationLine(string line, IReadOnlySet<string> workflowProposedPaths)
+    internal static bool IsAllowedNewRegistrationLine(
+        string line,
+        IReadOnlySet<string> workflowProposedPaths,
+        string repoPath)
     {
         Match match = RegistrationPairRegex.Match(line);
         if (!match.Success)
@@ -222,11 +228,11 @@ internal static class DependencyWiringAuditor
 
         string iface = match.Groups[1].Value;
         string impl = match.Groups[2].Value;
-        return IsWorkflowIntroducedRegistrationPair(iface, impl, workflowProposedPaths);
+        return IsWorkflowIntroducedRegistrationPair(iface, impl, workflowProposedPaths, repoPath);
     }
 
     /// <summary>Removes only invalid registration lines; never strips pre-existing bootstrap wiring.</summary>
-    internal static bool ShouldRemoveInvalidRegistrationLine(string line)
+    internal static bool ShouldRemoveInvalidRegistrationLine(string line, string repoPath)
     {
         Match match = RegistrationPairRegex.Match(line);
         if (!match.Success)
@@ -236,7 +242,7 @@ internal static class DependencyWiringAuditor
 
         string iface = match.Groups[1].Value;
         string impl = match.Groups[2].Value;
-        if (PreExistingContractGuard.IsProtectedInterfaceName(iface))
+        if (PreExistingContractGuard.IsProtectedInterfaceName(iface, repoPath))
         {
             return true;
         }
@@ -245,12 +251,12 @@ internal static class DependencyWiringAuditor
                || !expectedImpl.Equals(impl, StringComparison.Ordinal);
     }
 
-    internal static string SanitizeBootstrapRegistrations(string content)
+    internal static string SanitizeBootstrapRegistrations(string content, string repoPath)
     {
         var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
         for (int i = 0; i < lines.Count; i++)
         {
-            if (ShouldRemoveInvalidRegistrationLine(lines[i]))
+            if (ShouldRemoveInvalidRegistrationLine(lines[i], repoPath))
             {
                 lines[i] = string.Empty;
             }
@@ -261,7 +267,8 @@ internal static class DependencyWiringAuditor
 
     private static HashSet<string> CollectWorkflowIntroducedInterfaces(
         IEnumerable<GeneratedFile> proposedFiles,
-        IReadOnlySet<string> workflowProposedPaths)
+        IReadOnlySet<string> workflowProposedPaths,
+        string repoPath)
     {
         var required = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in proposedFiles)
@@ -270,7 +277,7 @@ internal static class DependencyWiringAuditor
             if (!file.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
                 || !interfaceName.StartsWith('I')
                 || !TryGetImplementationTypeName(interfaceName, out string implementationName)
-                || !IsWorkflowIntroducedRegistrationPair(interfaceName, implementationName, workflowProposedPaths))
+                || !IsWorkflowIntroducedRegistrationPair(interfaceName, implementationName, workflowProposedPaths, repoPath))
             {
                 continue;
             }
@@ -284,9 +291,10 @@ internal static class DependencyWiringAuditor
     private static bool IsWorkflowIntroducedRegistrationPair(
         string interfaceName,
         string implementationName,
-        IReadOnlySet<string> workflowProposedPaths)
+        IReadOnlySet<string> workflowProposedPaths,
+        string repoPath)
     {
-        if (PreExistingContractGuard.IsProtectedInterfaceName(interfaceName))
+        if (PreExistingContractGuard.IsProtectedInterfaceName(interfaceName, repoPath))
         {
             return false;
         }

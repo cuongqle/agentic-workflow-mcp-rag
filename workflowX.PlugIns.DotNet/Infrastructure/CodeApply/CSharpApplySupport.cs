@@ -20,13 +20,13 @@ internal static class CSharpApplySupport
                 continue;
             }
 
-            AddInterfaceMethods(File.ReadAllText(file), map);
+            AddInterfaceMethods(repoPath, File.ReadAllText(file), map);
         }
 
         foreach (var generated in generatedFiles.Where(f => Path.GetFileName(f.RelativePath).StartsWith("I", StringComparison.OrdinalIgnoreCase)
                                                          && f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
         {
-            AddInterfaceMethods(generated.Content, map, overwrite: true, skipProtectedInterfaces: true);
+            AddInterfaceMethods(repoPath, generated.Content, map, overwrite: true, skipProtectedInterfaces: true);
         }
 
         PropagateInheritedRepositoryMethods(repoPath, generatedFiles, map);
@@ -157,7 +157,7 @@ internal static class CSharpApplySupport
         reason = null;
 
         if (!PreExistingContractGuard.TryValidateOverwrite(
-                relativePath, existingOnDisk, content, ctx.WorkflowProposedPaths, out string contractReason))
+                relativePath, existingOnDisk, content, ctx.WorkflowProposedPaths, ctx.RepoPath, out string contractReason))
         {
             reason = contractReason;
             return false;
@@ -178,7 +178,8 @@ internal static class CSharpApplySupport
                     content,
                     out string mergedBootstrap,
                     out string? mergeReason,
-                    ctx.WorkflowProposedPaths))
+                    ctx.WorkflowProposedPaths,
+                    ctx.RepoPath))
             {
                 reason = mergeReason ?? "Rejected invalid composition-root rewrite; append DI registration lines only.";
                 return false;
@@ -691,12 +692,16 @@ internal static class CSharpApplySupport
         RegexOptions.Compiled);
 
     private static void AddInterfaceMethods(
-        string content, Dictionary<string, HashSet<string>> map, bool overwrite = false, bool skipProtectedInterfaces = false)
+        string repoPath,
+        string content,
+        Dictionary<string, HashSet<string>> map,
+        bool overwrite = false,
+        bool skipProtectedInterfaces = false)
     {
         foreach (Match ifaceMatch in InterfaceDeclarationRegex.Matches(content))
         {
             string iface = ifaceMatch.Groups[1].Value;
-            if (skipProtectedInterfaces && PreExistingContractGuard.IsProtectedInterfaceName(iface))
+            if (skipProtectedInterfaces && PreExistingContractGuard.IsProtectedInterfaceName(iface, repoPath))
             {
                 continue;
             }

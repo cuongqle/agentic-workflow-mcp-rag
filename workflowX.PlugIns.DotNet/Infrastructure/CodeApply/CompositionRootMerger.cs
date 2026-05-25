@@ -18,16 +18,17 @@ internal static class CompositionRootMerger
         string proposedContent,
         out string mergedContent,
         out string? reason,
-        IReadOnlySet<string>? workflowProposedPaths = null)
+        IReadOnlySet<string>? workflowProposedPaths = null,
+        string repoPath = "")
     {
-        string sanitizedExisting = SanitizeBootstrapContent(existingContent);
+        string sanitizedExisting = SanitizeBootstrapContent(existingContent, repoPath);
         mergedContent = sanitizedExisting;
         reason = null;
         BootstrapRegistrationScope.BootstrapScope? scope = BootstrapRegistrationScope.DiscoverFromContent(sanitizedExisting, string.Empty);
 
         var newLines = ExtractRegistrationLines(proposedContent, scope?.CollectionVariable)
             .Where(line => workflowProposedPaths is null
-                           || DependencyWiringAuditor.IsAllowedNewRegistrationLine(line, workflowProposedPaths))
+                           || DependencyWiringAuditor.IsAllowedNewRegistrationLine(line, workflowProposedPaths, repoPath))
             .Where(line => !sanitizedExisting.Contains(line.Trim(), StringComparison.Ordinal))
             .ToList();
 
@@ -46,7 +47,7 @@ internal static class CompositionRootMerger
             return false;
         }
 
-        mergedContent = SanitizeBootstrapContent(mergedContent);
+        mergedContent = SanitizeBootstrapContent(mergedContent, repoPath);
 
         if (!PassesBootstrapSyntaxChecks(mergedContent, out reason))
         {
@@ -76,7 +77,7 @@ internal static class CompositionRootMerger
             }
 
             string original = File.ReadAllText(path);
-            string sanitized = SanitizeBootstrapContent(original);
+            string sanitized = SanitizeBootstrapContent(original, repoPath);
             if (!sanitized.Equals(original, StringComparison.Ordinal)
                 && PassesBootstrapSyntaxChecks(sanitized, out _))
             {
@@ -86,8 +87,8 @@ internal static class CompositionRootMerger
         }
     }
 
-    internal static string SanitizeBootstrapContent(string content) =>
-        DependencyWiringAuditor.SanitizeBootstrapRegistrations(RemoveOrphanRegistrationLines(content));
+    internal static string SanitizeBootstrapContent(string content, string repoPath) =>
+        DependencyWiringAuditor.SanitizeBootstrapRegistrations(RemoveOrphanRegistrationLines(content), repoPath);
 
     internal static bool PassesBootstrapSyntaxChecks(string content, out string? reason)
     {

@@ -331,38 +331,6 @@ sealed class DependencyWiringComplianceRule : IComplianceRule
         DependencyWiringAuditor.ValidateMissingWiring(context.State);
 }
 
-sealed class InterfaceCallSignatureComplianceRule : FileComplianceRule
-{
-    public override string RuleId => "contract.interface-call-signatures";
-    public override string Category => "contract";
-
-    public override bool AppliesTo(ComplianceContext context) =>
-        context.Stack.DotNet && context.ProposedFiles.Count > 0;
-
-    protected override bool ShouldInspect(GeneratedFile file, ComplianceContext context) =>
-        file.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-        && (file.RelativePath.Contains("/Controllers/", StringComparison.OrdinalIgnoreCase)
-            || file.RelativePath.Contains("\\Controllers\\", StringComparison.OrdinalIgnoreCase)
-            || Regex.IsMatch(
-                file.Content,
-                @"(?:private|public|protected)\s+(?:readonly\s+)?I[A-Za-z0-9_]+\s+_?[A-Za-z][A-Za-z0-9_]*\s*;"));
-
-    protected override AgentFinding? ValidateFile(GeneratedFile file, ComplianceContext context)
-    {
-        var catalog = InterfaceCallSignatureGuard.BuildCatalog(context.RepoPath, context.ProposedFiles);
-        if (InterfaceCallSignatureGuard.TryValidate(file.Content, catalog, out string reason))
-        {
-            return null;
-        }
-
-        return new AgentFinding
-        {
-            Severity = FindingSeverity.High,
-            Message = reason
-        };
-    }
-}
-
 sealed class InterfaceImplementationComplianceRule : FileComplianceRule
 {
     public override string RuleId => "contract.interface-implementation";
@@ -637,7 +605,6 @@ static class DotNetComplianceRules
         new LayerContractComplianceRule(),
         new DependencyWiringComplianceRule(),
         new InterfaceImplementationComplianceRule(),
-        new InterfaceCallSignatureComplianceRule(),
         new TypeMemberConsistencyComplianceRule(),
         new TestBootstrapResolutionComplianceRule(),
         new TestCoverageComplianceRule(),

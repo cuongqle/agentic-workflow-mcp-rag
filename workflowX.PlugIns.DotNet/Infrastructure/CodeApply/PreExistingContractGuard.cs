@@ -3,7 +3,8 @@ using System.Text.RegularExpressions;
 namespace workflowX.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
-/// Prevents the workflow from rewriting pre-existing interfaces, base stores, and infrastructure types.
+/// Prevents rewriting pre-existing infrastructure contracts discovered from the repository layout.
+/// Invented API usage is validated generically via <see cref="InterfaceCallSignatureGuard"/>.
 /// </summary>
 internal static class PreExistingContractGuard
 {
@@ -12,36 +13,21 @@ internal static class PreExistingContractGuard
         RegexOptions.Compiled);
 
     private static readonly Regex InterfaceMethodRegex = new(
-        @"^\s*(?:[\w<>\[\],\s\?]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*;",
+        @"^\s*(?:[\w<>\[\],\s\?\.]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*;",
         RegexOptions.Compiled | RegexOptions.Multiline);
-
-    private static readonly HashSet<string> ProtectedInterfaceNames = new(StringComparer.Ordinal)
-    {
-        "IDbStore",
-        "IRepository",
-        "IEntity"
-    };
-
-    private static readonly string[] ForbiddenInfrastructureApiTokens =
-    {
-        "SaveChanges",
-        "SaveChangesAsync",
-        "DbContext",
-        ".Update(",
-        "DatabaseFacade"
-    };
 
     internal static bool TryValidateOverwrite(
         string relativePath,
         string? existingContent,
         string proposedContent,
         IReadOnlySet<string> workflowProposedPaths,
+        string repoPath,
         out string reason)
     {
         reason = string.Empty;
         if (string.IsNullOrEmpty(existingContent))
         {
-            return TryValidateNewSource(proposedContent, out reason);
+            return TryValidateNewSource(proposedContent, repoPath, out reason);
         }
 
         if (IsProtectedInfrastructurePath(relativePath))
@@ -62,47 +48,68 @@ internal static class PreExistingContractGuard
             if (!InterfaceMembersEqual(existingContent, proposedContent, iface))
             {
                 reason =
-                    $"Refused to change existing interface '{iface}' in '{relativePath}'. Use only members already declared in the repository (do not add SaveChanges, Update, or other invented APIs).";
+                    $"Refused to change existing interface '{iface}' in '{relativePath}'. Keep members aligned with the on-disk contract.";
                 return false;
             }
         }
 
-        return TryValidateNewSource(proposedContent, out reason);
+        return TryValidateNewSource(proposedContent, repoPath, out reason);
     }
 
-    internal static bool IsProtectedInterfaceName(string interfaceName) =>
-        ProtectedInterfaceNames.Contains(interfaceName);
+    internal static bool IsProtectedInterfaceName(string interfaceName, string repoPath) =>
+        DiscoverProtectedInterfaceNames(repoPath).Contains(interfaceName);
 
-    internal static bool TryValidateNewSource(string content, out string reason)
+    internal static HashSet<string> DiscoverProtectedInterfaceNames(string repoPath)
     {
-        reason = string.Empty;
-        foreach (string token in ForbiddenInfrastructureApiTokens)
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(repoPath) || !Directory.Exists(repoPath))
         {
-            if (content.Contains(token, StringComparison.Ordinal))
+            return names;
+        }
+
+        foreach (string file in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || file.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
             {
-                reason =
-                    $"Generated code references forbidden infrastructure API '{token}'. This repository uses existing IDbStore patterns (Save/Load/Query) — do not invent EF-style members.";
-                return false;
+                continue;
+            }
+
+            string relative = Path.GetRelativePath(repoPath, file).Replace('\\', '/');
+            if (!IsProtectedInfrastructurePath(relative))
+            {
+                continue;
+            }
+
+            foreach (Match match in InterfaceDeclarationRegex.Matches(File.ReadAllText(file)))
+            {
+                names.Add(match.Groups[1].Value);
             }
         }
 
+        return names;
+    }
+
+    internal static bool TryValidateNewSource(string content, string repoPath, out string reason)
+    {
+        reason = string.Empty;
         foreach (Match match in InterfaceDeclarationRegex.Matches(content))
         {
             string iface = match.Groups[1].Value;
-            if (!IsProtectedInterfaceName(iface))
+            if (!IsProtectedInterfaceName(iface, repoPath))
             {
                 continue;
             }
 
             reason =
-                $"Refused to generate or redefine protected interface '{iface}'. Only add new I*Repository interfaces for the new feature.";
+                $"Refused to generate or redefine protected interface '{iface}'. Add new feature contracts as new I* role interfaces instead.";
             return false;
         }
 
         return true;
     }
 
-    private static bool IsProtectedInfrastructurePath(string relativePath)
+    internal static bool IsProtectedInfrastructurePath(string relativePath)
     {
         string normalized = relativePath.Replace('\\', '/');
         string fileName = Path.GetFileName(normalized);
@@ -117,7 +124,7 @@ internal static class PreExistingContractGuard
             return true;
         }
 
-        return normalized.Contains("/Db/DbStore/", StringComparison.OrdinalIgnoreCase)
+        return normalized.Contains("/Db/", StringComparison.OrdinalIgnoreCase)
                && fileName.StartsWith("I", StringComparison.Ordinal)
                && !fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase);
     }

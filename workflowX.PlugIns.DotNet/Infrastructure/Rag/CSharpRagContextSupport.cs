@@ -51,6 +51,15 @@ internal static class CSharpRagContextSupport
             sb.AppendLine();
             sb.AppendLine(typeMemberRules);
         }
+
+        string? contractRules = InterfaceCallSignatureGuard.BuildRagContext(
+            repoPath,
+            Array.Empty<GeneratedFile>());
+        if (!string.IsNullOrWhiteSpace(contractRules))
+        {
+            sb.AppendLine();
+            sb.AppendLine(contractRules);
+        }
     }
 
     internal static int ScoreBackendPath(string normalizedPath)

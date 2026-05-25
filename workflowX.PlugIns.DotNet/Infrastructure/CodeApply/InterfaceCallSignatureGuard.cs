@@ -3,12 +3,11 @@ using System.Text.RegularExpressions;
 namespace workflowX.Infrastructure.CodeApply.DotNet;
 
 /// <summary>
-/// Validates that calls through injected role interfaces (I*Repository, I*Service, etc.)
-/// pass arguments whose types match the interface method signatures.
+/// Validates calls through injected interface dependencies against contracts discovered from the repository.
 /// </summary>
 internal static class InterfaceCallSignatureGuard
 {
-    private static readonly Regex FieldRegex = new(
+    internal static readonly Regex InjectedInterfaceFieldRegex = new(
         @"(?:private|public|protected)\s+(?:readonly\s+)?(I[A-Za-z0-9_]+)\s+(_?[A-Za-z][A-Za-z0-9_]*)\s*;",
         RegexOptions.Compiled);
 
@@ -18,6 +17,10 @@ internal static class InterfaceCallSignatureGuard
 
     private static readonly Regex InterfaceMethodRegex = new(
         @"^\s*(?:[\w<>\[\],\s\?\.]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*;",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static readonly Regex InterfaceGenericMethodRegex = new(
+        @"^\s*(?:[\w<>\[\],\s\?\.]+\s+)+([A-Za-z_][A-Za-z0-9_]*)<[^>]+>\s*\(([^)]*)\)\s*;",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     private static readonly Regex MethodBlockStartRegex = new(
@@ -36,23 +39,23 @@ internal static class InterfaceCallSignatureGuard
         private readonly Dictionary<string, HashSet<string>> _methodNames =
             new(StringComparer.Ordinal);
 
+        internal void RegisterInterface(string interfaceName)
+        {
+            if (!_methodNames.ContainsKey(interfaceName))
+            {
+                _methodNames[interfaceName] = new HashSet<string>(StringComparer.Ordinal);
+                _signatures[interfaceName] = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            }
+        }
+
         internal void AddMethod(string interfaceName, string methodName, IReadOnlyList<string> parameterTypes)
         {
-            if (!_signatures.TryGetValue(interfaceName, out Dictionary<string, string[]>? methods))
-            {
-                methods = new Dictionary<string, string[]>(StringComparer.Ordinal);
-                _signatures[interfaceName] = methods;
-            }
+            RegisterInterface(interfaceName);
+            Dictionary<string, string[]> methods = _signatures[interfaceName];
 
             methods[methodName] = parameterTypes.ToArray();
 
-            if (!_methodNames.TryGetValue(interfaceName, out HashSet<string>? names))
-            {
-                names = new HashSet<string>(StringComparer.Ordinal);
-                _methodNames[interfaceName] = names;
-            }
-
-            names.Add(methodName);
+            _methodNames[interfaceName].Add(methodName);
         }
 
         internal bool TryGetParameterTypes(string interfaceName, string methodName, out string[] parameterTypes)
@@ -62,8 +65,62 @@ internal static class InterfaceCallSignatureGuard
                    && methods.TryGetValue(methodName, out parameterTypes!);
         }
 
+        internal bool InterfaceIsKnown(string interfaceName) =>
+            _methodNames.ContainsKey(interfaceName);
+
         internal bool TryGetMethodNames(string interfaceName, out HashSet<string> methodNames) =>
             _methodNames.TryGetValue(interfaceName, out methodNames!);
+
+        internal IEnumerable<KeyValuePair<string, IReadOnlyList<string>>> EnumerateMethods()
+        {
+            foreach ((string interfaceName, Dictionary<string, string[]> methods) in _signatures)
+            {
+                foreach ((string methodName, string[] parameterTypes) in methods)
+                {
+                    yield return new KeyValuePair<string, IReadOnlyList<string>>(
+                        $"{interfaceName}.{methodName}",
+                        parameterTypes);
+                }
+            }
+        }
+    }
+
+    internal static bool HasInjectedInterfaceDependencies(string content) =>
+        InjectedInterfaceFieldRegex.IsMatch(content);
+
+    internal static string? BuildRagContext(string repoPath, IReadOnlyList<GeneratedFile> proposedFiles)
+    {
+        SignatureCatalog catalog = BuildCatalog(repoPath, proposedFiles);
+        var lines = catalog.EnumerateMethods()
+            .GroupBy(entry => entry.Key[..entry.Key.LastIndexOf('.')])
+            .Take(10)
+            .Select(group =>
+            {
+                string iface = group.Key;
+                var methods = group
+                    .Select(entry =>
+                    {
+                        string methodName = entry.Key[(entry.Key.LastIndexOf('.') + 1)..];
+                        string args = entry.Value.Count == 0
+                            ? "()"
+                            : $"({string.Join(", ", entry.Value)})";
+                        return $"{methodName}{args}";
+                    })
+                    .Take(10);
+                return $"- {iface}: {string.Join(", ", methods)}";
+            })
+            .ToList();
+        if (lines.Count == 0)
+        {
+            return """
+                Discovered interface contracts:
+                - Only call members declared on injected I* dependencies.
+                - Match parameter types end-to-end across every layer.
+                """;
+        }
+
+        return "Discovered interface contracts (only call declared members; match parameter types across layers):\n"
+               + string.Join('\n', lines);
     }
 
     internal static SignatureCatalog BuildCatalog(string repoPath, IReadOnlyList<GeneratedFile> proposedFiles)
@@ -99,7 +156,7 @@ internal static class InterfaceCallSignatureGuard
         out string reason)
     {
         reason = string.Empty;
-        var fieldTypeMap = FieldRegex.Matches(content)
+        var fieldTypeMap = InjectedInterfaceFieldRegex.Matches(content)
             .ToDictionary(m => m.Groups[2].Value, m => m.Groups[1].Value, StringComparer.Ordinal);
         if (fieldTypeMap.Count == 0)
         {
@@ -119,14 +176,16 @@ internal static class InterfaceCallSignatureGuard
 
                 if (!catalog.TryGetParameterTypes(interfaceName, method, out string[] expectedTypes))
                 {
-                    if (catalog.TryGetMethodNames(interfaceName, out HashSet<string>? knownMethods)
+                    if (catalog.InterfaceIsKnown(interfaceName)
+                        && catalog.TryGetMethodNames(interfaceName, out HashSet<string>? knownMethods)
+                        && knownMethods.Count > 0
                         && !knownMethods.Contains(method))
                     {
                         string knownMembers = string.Join(
                             ", ",
                             knownMethods.OrderBy(name => name, StringComparer.Ordinal).Take(12));
                         reason =
-                            $"Method call {variable}.{method}(...) is not defined on {interfaceName}. Known members: {knownMembers}.";
+                            $"Method call {variable}.{method}(...) is not declared on {interfaceName}. Known members: {knownMembers}.";
                         return false;
                     }
 
@@ -155,7 +214,7 @@ internal static class InterfaceCallSignatureGuard
                     reason =
                         $"Call {variable}.{method}(...) passes {actualType} for parameter {i + 1}, "
                         + $"but {interfaceName} expects {expectedTypes[i]}. "
-                        + "Align action/controller parameter types with the role interface and entity key types.";
+                        + "Use matching CLR types across all layers for the same value.";
                     return false;
                 }
             }
@@ -169,13 +228,22 @@ internal static class InterfaceCallSignatureGuard
         foreach (Match ifaceMatch in InterfaceDeclarationRegex.Matches(content))
         {
             string interfaceName = ifaceMatch.Groups[1].Value;
-            if (PreExistingContractGuard.IsProtectedInterfaceName(interfaceName))
-            {
-                continue;
-            }
-
+            catalog.RegisterInterface(interfaceName);
             string body = ExtractInterfaceBody(content, ifaceMatch.Index);
             foreach (Match methodMatch in InterfaceMethodRegex.Matches(body))
+            {
+                string methodName = methodMatch.Groups[1].Value;
+                if (overwrite
+                    || !catalog.TryGetParameterTypes(interfaceName, methodName, out _))
+                {
+                    catalog.AddMethod(
+                        interfaceName,
+                        methodName,
+                        ParseParameterTypeList(methodMatch.Groups[2].Value));
+                }
+            }
+
+            foreach (Match methodMatch in InterfaceGenericMethodRegex.Matches(body))
             {
                 string methodName = methodMatch.Groups[1].Value;
                 if (overwrite

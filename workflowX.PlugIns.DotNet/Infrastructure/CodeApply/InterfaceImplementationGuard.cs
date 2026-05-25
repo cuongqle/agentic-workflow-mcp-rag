@@ -108,14 +108,14 @@ internal static class InterfaceImplementationGuard
                 continue;
             }
 
-            AddDirectInterfaceMembers(File.ReadAllText(file), map);
+            AddDirectInterfaceMembers(File.ReadAllText(file), repoPath, map);
         }
 
         foreach (var generated in proposedFiles.Where(f =>
                      f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
                      && f.Content.Contains(" interface ", StringComparison.Ordinal)))
         {
-            AddDirectInterfaceMembers(generated.Content, map, overwrite: true);
+            AddDirectInterfaceMembers(generated.Content, repoPath, map, overwrite: true);
         }
 
         return map;
@@ -198,13 +198,14 @@ internal static class InterfaceImplementationGuard
 
     private static void AddDirectInterfaceMembers(
         string content,
+        string repoPath,
         Dictionary<string, HashSet<string>> map,
         bool overwrite = false)
     {
         foreach (Match ifaceMatch in InterfaceDeclarationRegex.Matches(content))
         {
             string iface = ifaceMatch.Groups[1].Value;
-            if (PreExistingContractGuard.IsProtectedInterfaceName(iface))
+            if (PreExistingContractGuard.IsProtectedInterfaceName(iface, repoPath))
             {
                 continue;
             }
@@ -319,7 +320,7 @@ internal static class InterfaceImplementationGuard
 
                 string interfaceContent = File.ReadAllText(interfacePath);
                 var directMembers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-                AddDirectInterfaceMembers(interfaceContent, directMembers);
+                AddDirectInterfaceMembers(interfaceContent, repoPath, directMembers);
                 string interfaceTypeName = profile.InterfacePairing.ResolveInterfaceTypeName(subject, profile);
                 string ifaceKey = !string.IsNullOrWhiteSpace(interfaceTypeName)
                     && directMembers.ContainsKey(interfaceTypeName)

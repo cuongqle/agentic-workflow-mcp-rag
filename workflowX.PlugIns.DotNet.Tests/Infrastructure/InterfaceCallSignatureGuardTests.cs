@@ -87,4 +87,82 @@ public class InterfaceCallSignatureGuardTests
         Assert.True(InterfaceCallSignatureGuard.TryValidate(controllerContent, catalog, out string reason));
         Assert.Empty(reason);
     }
+
+    [Fact]
+    public void TryValidate_allows_declared_role_interface_Update_calls()
+    {
+        const string interfaceContent = """
+            namespace Sample.Repository.Interfaces
+            {
+                public interface ITimesheetRepository
+                {
+                    void Update(Sample.Repository.Entities.Timesheet timesheet);
+                }
+            }
+            """;
+
+        const string controllerContent = """
+            namespace Sample.WebAPI.Controllers
+            {
+                public class TimesheetController
+                {
+                    private readonly ITimesheetRepository _timesheetRepository;
+
+                    public void Put(Sample.Repository.Entities.Timesheet timesheet)
+                    {
+                        _timesheetRepository.Update(timesheet);
+                    }
+                }
+            }
+            """;
+
+        var catalog = InterfaceCallSignatureGuard.BuildCatalog(
+            repoPath: string.Empty,
+            proposedFiles:
+            [
+                new GeneratedFile { RelativePath = "ITimesheetRepository.cs", Content = interfaceContent }
+            ]);
+
+        Assert.True(InterfaceCallSignatureGuard.TryValidate(controllerContent, catalog, out string reason));
+        Assert.Empty(reason);
+    }
+
+    [Fact]
+    public void TryValidate_rejects_undeclared_infrastructure_method_calls()
+    {
+        const string storeContent = """
+            namespace Sample.Db.DbStore
+            {
+                public interface IDbStore
+                {
+                    void Save<T>(T entity);
+                }
+            }
+            """;
+
+        const string repositoryContent = """
+            namespace Sample.Repository
+            {
+                public class TimesheetRepository
+                {
+                    private readonly IDbStore _dbStore;
+
+                    public void Save(Sample.Repository.Entities.Timesheet timesheet)
+                    {
+                        _dbStore.Update(timesheet);
+                    }
+                }
+            }
+            """;
+
+        var catalog = InterfaceCallSignatureGuard.BuildCatalog(
+            repoPath: string.Empty,
+            proposedFiles:
+            [
+                new GeneratedFile { RelativePath = "IDbStore.cs", Content = storeContent }
+            ]);
+
+        Assert.False(InterfaceCallSignatureGuard.TryValidate(repositoryContent, catalog, out string reason));
+        Assert.Contains("not declared on IDbStore", reason, StringComparison.Ordinal);
+    }
 }

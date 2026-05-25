@@ -1,4 +1,5 @@
 using workflowX.Infrastructure;
+using workflowX.Infrastructure.CodeApply.DotNet;
 
 sealed class ProtectedContractComplianceRule : FileComplianceRule
 {
@@ -13,19 +14,35 @@ sealed class ProtectedContractComplianceRule : FileComplianceRule
         string absolute = Path.Combine(context.RepoPath, relative.Replace('/', Path.DirectorySeparatorChar));
         string? existing = File.Exists(absolute) ? File.ReadAllText(absolute) : null;
 
-        if (PreExistingContractGuard.TryValidateOverwrite(
+        if (!PreExistingContractGuard.TryValidateOverwrite(
                 relative,
                 existing,
                 file.Content,
                 context.ProposedPaths,
+                context.RepoPath,
                 out string reason))
+        {
+            return new AgentFinding
+            {
+                Severity = FindingSeverity.Blocker,
+                Message = reason
+            };
+        }
+
+        if (!InterfaceCallSignatureGuard.HasInjectedInterfaceDependencies(file.Content))
+        {
+            return null;
+        }
+
+        var catalog = InterfaceCallSignatureGuard.BuildCatalog(context.RepoPath, context.ProposedFiles);
+        if (InterfaceCallSignatureGuard.TryValidate(file.Content, catalog, out reason))
         {
             return null;
         }
 
         return new AgentFinding
         {
-            Severity = FindingSeverity.Blocker,
+            Severity = FindingSeverity.High,
             Message = reason
         };
     }
