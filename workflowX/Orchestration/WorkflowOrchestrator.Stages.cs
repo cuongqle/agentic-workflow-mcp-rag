@@ -342,7 +342,7 @@ sealed partial class WorkflowOrchestrator
         AcceptanceCriteriaReport deterministicReport =
             AcceptanceCriteriaGate.EvaluateDeterministic(state, _acceptanceCriteriaOptions);
         var acceptanceAgentResult = await _acceptanceCriteriaAgent.ExecuteAsync(state, cancellationToken);
-        RequirementsSpec requirements = state.RequirementsSpec ?? new RequirementsSpec();
+        RequirementsSpec requirements = RequirementsSpecParser.ResolveForWorkflow(state);
         AcceptanceCriteriaReport mergedReport = AcceptanceCriteriaGate.MergeReports(
             deterministicReport,
             acceptanceAgentResult.AcceptanceCriteriaReport,

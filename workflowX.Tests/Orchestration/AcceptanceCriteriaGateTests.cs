@@ -182,4 +182,39 @@ public class AcceptanceCriteriaGateTests
         Assert.Contains("Automated tests passed.", ac4.Evidence);
         Assert.Contains("TimesheetRepositoryTests.cs", ac4.Evidence);
     }
+
+    [Fact]
+    public void EvaluateDeterministic_loads_acceptance_criteria_from_requirements_json_when_state_empty()
+    {
+        using TempRepo repo = new();
+        string outputDir = WorkflowArtifactWriter.OutputDirectory(new WorkflowState { RepoPath = repo.Path });
+        Directory.CreateDirectory(outputDir);
+        File.WriteAllText(
+            Path.Combine(outputDir, "requirements.json"),
+            """
+            {
+              "userStory": "As a user, I want timesheets.",
+              "acceptanceCriteria": [
+                { "id": "AC-1", "description": "Production build succeeds." }
+              ]
+            }
+            """);
+
+        WorkflowState state = WorkflowStateBuilder.Create(repo.Path, stack: new RepoStack(true, false));
+        state.BuildValidation = new AgentResult
+        {
+            AgentName = "BuildValidationAgent",
+            Summary = "Build passed",
+            ProductionBuildPassed = true
+        };
+
+        AcceptanceCriteriaReport report = AcceptanceCriteriaGate.EvaluateDeterministic(
+            state,
+            new AcceptanceCriteriaOptions { Enabled = true });
+
+        Assert.DoesNotContain(report.Evaluations, evaluation => evaluation.Id == "GATE");
+        Assert.Contains(report.Evaluations, evaluation => evaluation.Id == "AC-1");
+        Assert.NotNull(state.RequirementsSpec);
+        Assert.Single(state.RequirementsSpec!.AcceptanceCriteria);
+    }
 }

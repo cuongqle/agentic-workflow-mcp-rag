@@ -60,6 +60,13 @@ internal static class CSharpRagContextSupport
             sb.AppendLine();
             sb.AppendLine(contractRules);
         }
+
+        string? mutationRules = ControllerMutationValidationGuard.BuildRagContext(repoPath);
+        if (!string.IsNullOrWhiteSpace(mutationRules))
+        {
+            sb.AppendLine();
+            sb.AppendLine(mutationRules);
+        }
     }
 
     internal static int ScoreBackendPath(string normalizedPath)

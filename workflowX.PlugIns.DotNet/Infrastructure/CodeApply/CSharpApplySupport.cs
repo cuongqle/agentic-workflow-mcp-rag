@@ -60,6 +60,7 @@ internal static class CSharpApplySupport
         content = NormalizeRepositoryUsings(relativePath, content, context.Contract.RepositoryInterfacesNamespace);
         content = EnsureReferencedTypeUsings(content, context.TypeNamespaceCatalog);
         content = NormalizeLayerConstructorDependencies(context, relativePath, content);
+        content = EnsureConstructorDependencyFields(relativePath, content);
         return NormalizeLayerTestContent(relativePath, content, context.RepoPath);
     }
 
@@ -115,6 +116,23 @@ internal static class CSharpApplySupport
         if (!ClassMemberAccessGuard.TryValidate(context.RepoPath, relativePath, trimmed, out reason))
         {
             return false;
+        }
+
+        if (relativePath.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            string? entityContent = ControllerMutationValidationGuard.ResolveEntityContentForCompliance(
+                context.RepoPath,
+                context.GeneratedFiles,
+                relativePath);
+            if (!ControllerMutationValidationGuard.TryValidate(
+                    context.RepoPath,
+                    relativePath,
+                    trimmed,
+                    entityContent,
+                    out reason))
+            {
+                return false;
+            }
         }
 
         string fileName = Path.GetFileName(relativePath);
@@ -518,6 +536,91 @@ internal static class CSharpApplySupport
         return char.ToUpperInvariant(parameterName[0]) + parameterName[1..];
     }
 
+    /// <summary>
+    /// Ensures every constructor-injected interface dependency has a matching field and assignment.
+    /// Fixes recovery output that calls this.EmployeeRepository without declaring the field.
+    /// </summary>
+    private static string EnsureConstructorDependencyFields(string relativePath, string content)
+    {
+        string fileName = Path.GetFileName(relativePath);
+        if (!fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return content;
+        }
+
+        string className = Path.GetFileNameWithoutExtension(fileName);
+        Match ctorMatch = FindConstructorMatch(content, className);
+        if (!ctorMatch.Success)
+        {
+            return content;
+        }
+
+        foreach ((string type, string name) in ParseConstructorParameters(ctorMatch.Groups["params"].Value))
+        {
+            if (!type.StartsWith('I') || type.Length <= 1 || !char.IsUpper(type[1]))
+            {
+                continue;
+            }
+
+            string fieldName = ResolveDependencyFieldName(type, name);
+            if (!HasFieldDeclaration(content, fieldName))
+            {
+                string fieldDecl = $"    private readonly {type} {fieldName};{Environment.NewLine}";
+                content = content.Insert(ctorMatch.Index, fieldDecl);
+                ctorMatch = FindConstructorMatch(content, className);
+                if (!ctorMatch.Success)
+                {
+                    return content;
+                }
+            }
+
+            if (!HasFieldAssignment(content, fieldName, name))
+            {
+                bool usesThisPrefix = content.Contains($"this.{fieldName}", StringComparison.Ordinal);
+                string assignment = usesThisPrefix
+                    ? $"        this.{fieldName} = {name};{Environment.NewLine}"
+                    : $"        {fieldName} = {name};{Environment.NewLine}";
+                int bodyInsertIndex = ctorMatch.Index + ctorMatch.Length;
+                content = content.Insert(bodyInsertIndex, assignment);
+                ctorMatch = FindConstructorMatch(content, className);
+                if (!ctorMatch.Success)
+                {
+                    return content;
+                }
+            }
+        }
+
+        return content;
+    }
+
+    private static IEnumerable<(string Type, string Name)> ParseConstructorParameters(string parameterList)
+    {
+        foreach (string param in parameterList.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string normalized = Regex.Replace(param.Trim(), @"\s+", " ");
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                continue;
+            }
+
+            string[] parts = normalized.Split(' ');
+            if (parts.Length >= 2)
+            {
+                yield return (parts[0].Trim(), parts[^1].Trim());
+            }
+        }
+    }
+
+    private static bool HasFieldDeclaration(string content, string fieldName) =>
+        Regex.IsMatch(
+            content,
+            $@"(?:private|protected|public|internal)\s+(?:readonly\s+)?[\w<>\[\],\s\?\.]+\s+{Regex.Escape(fieldName)}\s*;",
+            RegexOptions.Multiline);
+
+    private static bool HasFieldAssignment(string content, string fieldName, string parameterName) =>
+        content.Contains($"{fieldName} = {parameterName}", StringComparison.Ordinal)
+        || content.Contains($"this.{fieldName} = {parameterName}", StringComparison.Ordinal);
+
     private static bool ValidateDynamicLayerConventions(
         string relativePath, string content, LayerConventionProfiles conventions, string repoPath, out string reason)
     {
@@ -672,6 +775,11 @@ internal static class CSharpApplySupport
         if (string.IsNullOrWhiteSpace(ns))
         {
             return;
+        }
+
+        if (ns.EndsWith(';'))
+        {
+            ns = ns[..^1].Trim();
         }
 
         foreach (var type in Regex.Matches(content, @"\b(class|interface|record|struct)\s+([A-Za-z_][A-Za-z0-9_]*)")

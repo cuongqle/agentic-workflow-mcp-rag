@@ -18,9 +18,23 @@ static class DotNetTestReleasePolicySupport
         Func<string, Task> publishStatusAsync,
         CancellationToken cancellationToken)
     {
+        var deliverablePaths = CollectArchitectureDeliverablePaths(state);
         var testChanges = rollbackChanges.Values
             .Where(change => BuildFailureClassifier.IsTestArtifactPath(change.RelativePath))
             .ToList();
+        var retainedDeliverables = testChanges
+            .Where(change => deliverablePaths.Contains(NormalizeRelativePath(change.RelativePath)))
+            .ToList();
+        if (retainedDeliverables.Count > 0)
+        {
+            testChanges = testChanges
+                .Where(change => !deliverablePaths.Contains(NormalizeRelativePath(change.RelativePath)))
+                .ToList();
+            state.AddTimeline(
+                $"Retained {retainedDeliverables.Count} architecture deliverable test file(s) during quarantine: "
+                + string.Join(", ", retainedDeliverables.Select(change => change.RelativePath)));
+        }
+
         if (testChanges.Count == 0)
         {
             return false;
@@ -103,6 +117,36 @@ static class DotNetTestReleasePolicySupport
             }
         }
     }
+
+    private static HashSet<string> CollectArchitectureDeliverablePaths(WorkflowState state)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (state.ArchitecturePlan is null)
+        {
+            return paths;
+        }
+
+        foreach (ArchitectureDeliverable deliverable in state.ArchitecturePlan.BackendFiles)
+        {
+            if (!string.IsNullOrWhiteSpace(deliverable.Path))
+            {
+                paths.Add(NormalizeRelativePath(deliverable.Path));
+            }
+        }
+
+        foreach (ArchitectureDeliverable deliverable in state.ArchitecturePlan.FrontendFiles)
+        {
+            if (!string.IsNullOrWhiteSpace(deliverable.Path))
+            {
+                paths.Add(NormalizeRelativePath(deliverable.Path));
+            }
+        }
+
+        return paths;
+    }
+
+    private static string NormalizeRelativePath(string relativePath) =>
+        relativePath.Replace('\\', '/').TrimStart('/');
 
     private static void RecordDeferredTestEntity(WorkflowState state, string relativePath)
     {

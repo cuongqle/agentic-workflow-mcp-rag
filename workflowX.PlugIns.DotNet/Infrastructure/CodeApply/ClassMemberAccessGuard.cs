@@ -120,7 +120,7 @@ internal static class ClassMemberAccessGuard
         IReadOnlyList<string> baseTypes)
     {
         var members = new HashSet<string>(StringComparer.Ordinal);
-        AddMembersFromContent(classContent, members, includePrivate: false);
+        AddMembersFromContent(classContent, members, includePrivate: true);
 
         var visited = new HashSet<string>(StringComparer.Ordinal) { className };
         foreach (string baseType in baseTypes)
@@ -164,23 +164,9 @@ internal static class ClassMemberAccessGuard
         foreach (Match match in InstanceMemberDeclarationRegex.Matches(content))
         {
             string name = match.Groups[2].Value;
-            if (!includePrivate)
+            if (!includePrivate && IsPrivateMemberDeclaration(content, match.Index))
             {
-                int index = match.Index;
-                string prefix = content[..index];
-                int lastModifier = Math.Max(
-                    prefix.LastIndexOf("private", StringComparison.Ordinal),
-                    Math.Max(prefix.LastIndexOf("protected", StringComparison.Ordinal),
-                        Math.Max(prefix.LastIndexOf("public", StringComparison.Ordinal),
-                            prefix.LastIndexOf("internal", StringComparison.Ordinal))));
-                if (lastModifier >= 0)
-                {
-                    string modifier = content[lastModifier..].TrimStart().Split(' ')[0];
-                    if (modifier.Equals("private", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-                }
+                continue;
             }
 
             members.Add(name);
@@ -191,6 +177,20 @@ internal static class ClassMemberAccessGuard
         {
             members.Add(match.Groups[1].Value);
         }
+    }
+
+    private static bool IsPrivateMemberDeclaration(string content, int memberIndex)
+    {
+        int lineStart = content.LastIndexOf('\n', Math.Max(0, memberIndex - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        int lineEnd = content.IndexOf('\n', memberIndex);
+        if (lineEnd < 0)
+        {
+            lineEnd = content.Length;
+        }
+
+        string line = content[lineStart..lineEnd].TrimStart();
+        return line.StartsWith("private ", StringComparison.Ordinal);
     }
 
     private static void RegisterMemberAlias(HashSet<string> members, string name)

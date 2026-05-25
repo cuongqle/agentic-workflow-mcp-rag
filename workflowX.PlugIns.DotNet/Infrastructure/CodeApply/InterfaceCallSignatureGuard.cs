@@ -15,6 +15,10 @@ internal static class InterfaceCallSignatureGuard
         @"\binterface\s+(I[A-Za-z0-9_]*)\b",
         RegexOptions.Compiled);
 
+    private static readonly Regex InterfaceInheritanceRegex = new(
+        @"\binterface\s+(I[A-Za-z0-9_]*)\s*(?::\s*([^{]+))?\s*\{",
+        RegexOptions.Compiled);
+
     private static readonly Regex InterfaceMethodRegex = new(
         @"^\s*(?:[\w<>\[\],\s\?\.]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*;",
         RegexOptions.Compiled | RegexOptions.Multiline);
@@ -126,6 +130,7 @@ internal static class InterfaceCallSignatureGuard
     internal static SignatureCatalog BuildCatalog(string repoPath, IReadOnlyList<GeneratedFile> proposedFiles)
     {
         var catalog = new SignatureCatalog();
+        var sources = new List<string>();
         if (!string.IsNullOrWhiteSpace(repoPath))
         {
             foreach (string file in Directory.EnumerateFiles(repoPath, "I*.cs", SearchOption.AllDirectories))
@@ -136,7 +141,9 @@ internal static class InterfaceCallSignatureGuard
                     continue;
                 }
 
-                AddInterfaceMethods(File.ReadAllText(file), catalog);
+                string content = File.ReadAllText(file);
+                sources.Add(content);
+                AddInterfaceMethods(content, catalog);
             }
         }
 
@@ -144,10 +151,201 @@ internal static class InterfaceCallSignatureGuard
                      Path.GetFileName(f.RelativePath).StartsWith("I", StringComparison.Ordinal)
                      && f.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
         {
+            sources.Add(generated.Content);
             AddInterfaceMethods(generated.Content, catalog, overwrite: true);
         }
 
+        PropagateInheritedInterfaceMethods(catalog, sources);
         return catalog;
+    }
+
+    /// <summary>
+    /// Merges members from base interfaces (e.g. IRepository&lt;T&gt;) onto derived I* interfaces discovered in source.
+    /// </summary>
+    private static void PropagateInheritedInterfaceMethods(SignatureCatalog catalog, IEnumerable<string> sources)
+    {
+        var sourceList = sources.ToList();
+        var inheritance = new Dictionary<string, List<InheritedInterfaceRef>>(StringComparer.Ordinal);
+        foreach (string content in sourceList)
+        {
+            foreach (Match match in InterfaceInheritanceRegex.Matches(content))
+            {
+                string iface = match.Groups[1].Value;
+                if (!match.Groups[2].Success || string.IsNullOrWhiteSpace(match.Groups[2].Value))
+                {
+                    continue;
+                }
+
+                List<InheritedInterfaceRef> bases = match.Groups[2].Value
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ParseInheritedInterfaceReference)
+                    .Where(reference => !string.IsNullOrWhiteSpace(reference.Name))
+                    .ToList();
+                if (bases.Count == 0)
+                {
+                    continue;
+                }
+
+                inheritance[iface] = bases;
+            }
+        }
+
+        foreach ((string derivedInterface, List<InheritedInterfaceRef> directBases) in inheritance)
+        {
+            catalog.RegisterInterface(derivedInterface);
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<InheritedInterfaceRef>(directBases);
+            while (queue.Count > 0)
+            {
+                InheritedInterfaceRef baseRef = queue.Dequeue();
+                string baseInterface = baseRef.Name;
+                if (!visited.Add(baseInterface))
+                {
+                    continue;
+                }
+
+                IReadOnlyList<string> genericParameterNames = ExtractGenericParameterNames(sourceList, baseInterface);
+                if (catalog.TryGetMethodNames(baseInterface, out HashSet<string>? baseMethods))
+                {
+                    foreach (string methodName in baseMethods)
+                    {
+                        if (catalog.TryGetParameterTypes(derivedInterface, methodName, out _))
+                        {
+                            continue;
+                        }
+
+                        if (catalog.TryGetParameterTypes(baseInterface, methodName, out string[]? parameterTypes))
+                        {
+                            IReadOnlyList<string> mappedTypes = MapGenericTypeParameters(
+                                parameterTypes,
+                                genericParameterNames,
+                                baseRef.TypeArguments);
+                            catalog.AddMethod(derivedInterface, methodName, mappedTypes);
+                        }
+                    }
+                }
+
+                if (inheritance.TryGetValue(baseInterface, out List<InheritedInterfaceRef>? transitiveBases))
+                {
+                    foreach (InheritedInterfaceRef parent in transitiveBases)
+                    {
+                        queue.Enqueue(parent);
+                    }
+                }
+            }
+        }
+    }
+
+    private readonly record struct InheritedInterfaceRef(string Name, IReadOnlyList<string> TypeArguments);
+
+    private static InheritedInterfaceRef ParseInheritedInterfaceReference(string token)
+    {
+        string trimmed = token.Trim();
+        int genericStart = trimmed.IndexOf('<');
+        if (genericStart < 0)
+        {
+            return new InheritedInterfaceRef(trimmed, Array.Empty<string>());
+        }
+
+        string name = trimmed[..genericStart].Trim();
+        string args = trimmed[(genericStart + 1)..].TrimEnd('>').Trim();
+        return new InheritedInterfaceRef(name, SplitTopLevelTypeArguments(args));
+    }
+
+    private static IReadOnlyList<string> SplitTopLevelTypeArguments(string argumentList)
+    {
+        if (string.IsNullOrWhiteSpace(argumentList))
+        {
+            return Array.Empty<string>();
+        }
+
+        var arguments = new List<string>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < argumentList.Length; i++)
+        {
+            char c = argumentList[i];
+            if (c is '<' or '(' or '[')
+            {
+                depth++;
+            }
+            else if (c is '>' or ')' or ']')
+            {
+                depth--;
+            }
+            else if (c == ',' && depth == 0)
+            {
+                arguments.Add(argumentList[start..i].Trim());
+                start = i + 1;
+            }
+        }
+
+        arguments.Add(argumentList[start..].Trim());
+        return arguments.Where(arg => !string.IsNullOrWhiteSpace(arg)).ToArray();
+    }
+
+    private static IReadOnlyList<string> ExtractGenericParameterNames(
+        IReadOnlyList<string> sources,
+        string interfaceName)
+    {
+        foreach (string content in sources)
+        {
+            Match match = Regex.Match(
+                content,
+                $@"\binterface\s+{Regex.Escape(interfaceName)}\s*<([^>]+)>",
+                RegexOptions.CultureInvariant);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            string parameterSegment = match.Groups[1].Value;
+            int whereIndex = parameterSegment.IndexOf("where", StringComparison.OrdinalIgnoreCase);
+            if (whereIndex >= 0)
+            {
+                parameterSegment = parameterSegment[..whereIndex];
+            }
+
+            return parameterSegment
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(token => token.Trim())
+                .Where(token => !string.IsNullOrWhiteSpace(token))
+                .ToList();
+        }
+
+        return Array.Empty<string>();
+    }
+
+    private static IReadOnlyList<string> MapGenericTypeParameters(
+        IReadOnlyList<string> parameterTypes,
+        IReadOnlyList<string> genericParameterNames,
+        IReadOnlyList<string> genericArguments)
+    {
+        if (genericParameterNames.Count == 0 || genericArguments.Count == 0)
+        {
+            return parameterTypes;
+        }
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < genericParameterNames.Count && i < genericArguments.Count; i++)
+        {
+            map[genericParameterNames[i]] = genericArguments[i];
+        }
+
+        return parameterTypes
+            .Select(type => MapGenericTypeParameter(type, map))
+            .ToArray();
+    }
+
+    private static string MapGenericTypeParameter(string type, IReadOnlyDictionary<string, string> genericMap)
+    {
+        string normalized = NormalizeType(type);
+        if (genericMap.TryGetValue(normalized, out string? mapped))
+        {
+            return mapped;
+        }
+
+        return type;
     }
 
     internal static bool TryValidate(
@@ -327,9 +525,26 @@ internal static class InterfaceCallSignatureGuard
             return false;
         }
 
-        type = NormalizeType(trimmed[..lastSpace].Trim());
+        type = NormalizeType(StripParameterAttributes(trimmed[..lastSpace].Trim()));
         name = trimmed[(lastSpace + 1)..].Trim();
         return !string.IsNullOrWhiteSpace(type) && !string.IsNullOrWhiteSpace(name);
+    }
+
+    private static string StripParameterAttributes(string typeToken)
+    {
+        string result = typeToken.Trim();
+        while (result.StartsWith("[", StringComparison.Ordinal))
+        {
+            int closeIndex = result.IndexOf(']', StringComparison.Ordinal);
+            if (closeIndex < 0)
+            {
+                break;
+            }
+
+            result = result[(closeIndex + 1)..].TrimStart();
+        }
+
+        return result;
     }
 
     private static bool TryResolveArgumentType(
@@ -392,8 +607,25 @@ internal static class InterfaceCallSignatureGuard
         return false;
     }
 
-    private static bool TypesMatch(string actualType, string expectedType) =>
-        string.Equals(NormalizeType(actualType), NormalizeType(expectedType), StringComparison.Ordinal);
+    private static bool TypesMatch(string actualType, string expectedType)
+    {
+        string normalizedActual = NormalizeType(actualType);
+        string normalizedExpected = NormalizeType(expectedType);
+        if (string.Equals(normalizedActual, normalizedExpected, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return string.Equals(
+            GetUnqualifiedTypeName(normalizedActual),
+            GetUnqualifiedTypeName(normalizedExpected),
+            StringComparison.Ordinal);
+    }
+
+    private static string GetUnqualifiedTypeName(string type) =>
+        type.Contains('.', StringComparison.Ordinal)
+            ? type[(type.LastIndexOf('.') + 1)..]
+            : type;
 
     private static string NormalizeType(string type)
     {

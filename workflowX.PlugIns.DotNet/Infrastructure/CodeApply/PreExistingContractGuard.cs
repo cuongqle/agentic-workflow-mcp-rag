@@ -40,7 +40,7 @@ internal static class PreExistingContractGuard
         foreach (Match match in InterfaceDeclarationRegex.Matches(existingContent))
         {
             string iface = match.Groups[1].Value;
-            if (IsWorkflowIntroducedRepositoryInterface(iface, relativePath, workflowProposedPaths))
+            if (ExtractInterfaceMethods(existingContent, iface).Count == 0)
             {
                 continue;
             }
@@ -127,19 +127,6 @@ internal static class PreExistingContractGuard
         return normalized.Contains("/Db/", StringComparison.OrdinalIgnoreCase)
                && fileName.StartsWith("I", StringComparison.Ordinal)
                && !fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsWorkflowIntroducedRepositoryInterface(
-        string interfaceName,
-        string relativePath,
-        IReadOnlySet<string> workflowProposedPaths)
-    {
-        if (!interfaceName.EndsWith("Repository", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return workflowProposedPaths.Contains(relativePath.Replace('\\', '/'));
     }
 
     private static bool InterfaceMembersEqual(string existingContent, string proposedContent, string interfaceName)

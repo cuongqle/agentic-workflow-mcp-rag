@@ -293,6 +293,7 @@ internal static class WorkflowStateCheckpointStore
             state.Timeline.Add(line);
         }
 
+        RequirementsSpecParser.HydrateFromArtifactsIfMissing(state);
         return state;
     }
 

@@ -64,6 +64,70 @@ static class RequirementsSpecParser
         return new RequirementsSpec { UserStory = requirementsResult?.Summary ?? string.Empty };
     }
 
+    /// <summary>
+    /// Uses in-memory requirements when present; otherwise loads workflowX-output/requirements.json from a prior run.
+    /// </summary>
+    public static RequirementsSpec ResolveForWorkflow(WorkflowState state)
+    {
+        if (state.RequirementsSpec?.HasAcceptanceCriteria == true)
+        {
+            return state.RequirementsSpec;
+        }
+
+        HydrateFromArtifactsIfMissing(state);
+        return state.RequirementsSpec ?? new RequirementsSpec();
+    }
+
+    public static void HydrateFromArtifactsIfMissing(WorkflowState state)
+    {
+        if (state.RequirementsSpec?.HasAcceptanceCriteria == true)
+        {
+            return;
+        }
+
+        if (!TryLoadFromArtifacts(state.RepoPath, out RequirementsSpec? spec, out string? summary)
+            || spec is null
+            || !spec.HasAcceptanceCriteria)
+        {
+            return;
+        }
+
+        state.RequirementsSpec = spec;
+        if (state.Requirements is null)
+        {
+            state.Requirements = new AgentResult
+            {
+                AgentName = "RequirementsAgent",
+                Summary = summary ?? FormatReadableSummary(spec),
+                RequirementsSpec = spec
+            };
+        }
+    }
+
+    public static bool TryLoadFromArtifacts(
+        string repoPath,
+        out RequirementsSpec? spec,
+        out string? summary)
+    {
+        spec = null;
+        summary = null;
+        if (string.IsNullOrWhiteSpace(repoPath))
+        {
+            return false;
+        }
+
+        string requirementsPath = Path.Combine(
+            WorkflowArtifactWriter.OutputDirectory(new WorkflowState { RepoPath = repoPath }),
+            "requirements.json");
+        if (!File.Exists(requirementsPath))
+        {
+            return false;
+        }
+
+        return TryParseJson(File.ReadAllText(requirementsPath), out spec, out summary)
+               && spec is not null;
+    }
+
     public static string FormatReadableSummary(RequirementsSpec spec)
     {
         var sb = new StringBuilder();

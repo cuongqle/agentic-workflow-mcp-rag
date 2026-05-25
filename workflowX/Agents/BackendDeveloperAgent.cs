@@ -46,6 +46,7 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
             - When the checklist includes *Tests.cs paths, implement unit tests by mirroring sibling *Tests.cs exemplars from RAG.
             - Complete source only: no stubs, TODO, NotImplementedException, or placeholder comments.
             - Keep CLR types consistent across every layer and file you touch: mirror RAG exemplars so the same identifier, route/query parameter, property, and method signature use matching types end-to-end (never pass a value through layers with incompatible types).
+            - For Create/Update/Post actions, mirror existing controller mutation validation: resolve each entity *Id foreign key through the related injected role repository (using whatever lookup member that repository exposes in this repo) before persisting, and return NotFound or an equivalent error when the related record is missing.
 
             Unified RAG context:
             {state.CombinedRagContext}

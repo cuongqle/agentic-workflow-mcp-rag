@@ -124,10 +124,11 @@ static class AcceptanceCriteriaGate
 {
     private static readonly string[] BuildKeywords = ["build", "compile", "compiles", "compilation"];
     private static readonly string[] TestKeywords = ["test", "unit test", "tests pass", "passing test"];
+    private static readonly string[] ValidationKeywords = ["validation", "validate", "validates"];
 
     public static AcceptanceCriteriaReport EvaluateDeterministic(WorkflowState state, AcceptanceCriteriaOptions options)
     {
-        RequirementsSpec requirements = state.RequirementsSpec ?? new RequirementsSpec();
+        RequirementsSpec requirements = RequirementsSpecParser.ResolveForWorkflow(state);
         var evaluations = new List<AcceptanceCriterionEvaluation>();
 
         if (options.Enabled && !requirements.HasAcceptanceCriteria)
@@ -183,13 +184,23 @@ static class AcceptanceCriteriaGate
 
             bool requiresBuild = MatchesAnyKeyword(criterion.Description, BuildKeywords);
             bool requiresTests = MatchesAnyKeyword(criterion.Description, TestKeywords);
-            if (!requiresBuild && !requiresTests)
+            bool requiresValidation = MatchesAnyKeyword(criterion.Description, ValidationKeywords);
+            if (!requiresBuild && !requiresTests && !requiresValidation)
             {
                 continue;
             }
 
             bool passed = true;
             var evidenceParts = new List<string>();
+            if (requiresValidation)
+            {
+                bool validationPassed = EvaluateMutationValidationEvidence(state);
+                passed &= validationPassed;
+                evidenceParts.Add(validationPassed
+                    ? "Backend mutation actions resolve foreign keys through role repositories before persisting, matching repository exemplars."
+                    : "Backend mutation validation is missing or incomplete for at least one proposed controller.");
+            }
+
             if (requiresBuild)
             {
                 bool buildPassed = state.BuildValidation?.ProductionBuildPassed == true;
@@ -379,10 +390,26 @@ static class AcceptanceCriteriaGate
             return false;
         }
 
-        return HasAuthoritativeBuildOrTestEvidence(deterministic.Evidence);
+        return HasAuthoritativeBuildOrTestEvidence(deterministic.Evidence)
+               || HasAuthoritativeValidationEvidence(deterministic.Evidence);
     }
+
+    internal static bool HasAuthoritativeValidationEvidence(string evidence) =>
+        evidence.Contains("Backend mutation actions resolve foreign keys", StringComparison.OrdinalIgnoreCase);
 
     internal static bool HasAuthoritativeBuildOrTestEvidence(string evidence) =>
         evidence.Contains("Automated tests passed.", StringComparison.OrdinalIgnoreCase)
         || evidence.Contains("Production build passed.", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EvaluateMutationValidationEvidence(WorkflowState state)
+    {
+        RepoStack stack = state.Contract?.Stack ?? RepoStack.None;
+        if (!stack.DotNet)
+        {
+            return true;
+        }
+
+        var proposedFiles = ProposedFileSupport.GetFilesForComplianceValidation(state);
+        return ControllerMutationValidationGuard.HasValidationEvidence(state.RepoPath, proposedFiles);
+    }
 }

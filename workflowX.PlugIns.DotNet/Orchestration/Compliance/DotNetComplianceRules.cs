@@ -331,6 +331,41 @@ sealed class DependencyWiringComplianceRule : IComplianceRule
         DependencyWiringAuditor.ValidateMissingWiring(context.State);
 }
 
+sealed class ControllerMutationValidationComplianceRule : FileComplianceRule
+{
+    public override string RuleId => "architecture.controller-mutation-validation";
+    public override string Category => "architecture";
+
+    public override bool AppliesTo(ComplianceContext context) =>
+        context.Stack.DotNet && context.ProposedFiles.Count > 0;
+
+    protected override bool ShouldInspect(GeneratedFile file, ComplianceContext context) =>
+        file.RelativePath.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase);
+
+    protected override AgentFinding? ValidateFile(GeneratedFile file, ComplianceContext context)
+    {
+        string? entityContent = ControllerMutationValidationGuard.ResolveEntityContentForCompliance(
+            context.RepoPath,
+            context.ProposedFiles,
+            file.RelativePath);
+        if (!ControllerMutationValidationGuard.TryValidate(
+                context.RepoPath,
+                file.RelativePath,
+                file.Content,
+                entityContent,
+                out string reason))
+        {
+            return new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message = reason
+            };
+        }
+
+        return null;
+    }
+}
+
 sealed class InterfaceImplementationComplianceRule : FileComplianceRule
 {
     public override string RuleId => "contract.interface-implementation";
@@ -603,6 +638,7 @@ static class DotNetComplianceRules
     [
         new DotNetPathConventionComplianceRule(),
         new LayerContractComplianceRule(),
+        new ControllerMutationValidationComplianceRule(),
         new DependencyWiringComplianceRule(),
         new InterfaceImplementationComplianceRule(),
         new TypeMemberConsistencyComplianceRule(),
