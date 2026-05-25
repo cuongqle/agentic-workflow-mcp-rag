@@ -7,6 +7,9 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <NoWarn>$(NoWarn);SKEXP0001;SKEXP0050</NoWarn>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <Description>Multi-agent workflow automation for target repositories using Semantic Kernel, hybrid RAG, and GitHub MCP.</Description>
+        <PackageTags>semantic-kernel;multi-agent;workflow-automation;rag;mcp;dotnet</PackageTags>
     </PropertyGroup>
 
     <ItemGroup>

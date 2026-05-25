@@ -1,5 +1,9 @@
 # workflowX
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**Topics:** `semantic-kernel` · `multi-agent` · `workflow-automation`
+
 Multi-agent development workflow for a **target repository**. It uses **Semantic Kernel** (OpenAI), **local hybrid RAG** (lexical + embeddings), and the **GitHub MCP server** to capture requirements, plan architecture, generate code, validate builds, audit, recover, verify acceptance criteria, write artifacts, and optionally open a pull request—all while following patterns discovered in the existing codebase.
 
 The orchestrator **runs every stage to completion**; failures are recorded as PR blockers but do not stop later stages. A pull request is created only when no blockers remain.
@@ -685,4 +689,4 @@ When blockers exist, the timeline ends with lines such as `Pull request skipped 
 
 ## License
 
-Add your license here (e.g. MIT) if you open-source this repository.
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
