@@ -16,9 +16,11 @@ static class ComplianceContextFactory
         return new ComplianceContext(state, state.RepoPath, contract, proposedFiles, proposedPaths)
         {
             ResolveInterfacePairing = profile =>
-                profile.SampleCount > 0
-                    ? profile.InterfacePairing
-                    : LayerInterfacePairingDiscoverer.Discover(state.RepoPath, profile),
+                stack.DotNetOr(
+                    profile.SampleCount > 0
+                        ? profile.InterfacePairing
+                        : LayerInterfacePairingDiscoverer.Discover(state.RepoPath, profile),
+                    LayerInterfacePairingConvention.None),
             BuildProposedTypeDefinitions = files =>
                 stack.DotNetOr(
                     TypeMemberConsistencyGuard.BuildProposedTypeDefinitions(files),
