@@ -86,7 +86,7 @@ RepoStack routes at orchestration boundaries:
 | ------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------- |
 | Apply        | `ApplyContentGuard`, `ApplyContext` (Core), `ApplyContextFactory`, `GeneratedFileApplier`                      | `CSharpApplySupport`, guards, DI merge    | `FrontendApplyGuard`                    |
 | RAG          | `RagContextComposer`, `RepoCodeFileScanner`                                                                    | `CSharpRagContextSupport`                 | `FrontendRagContextSupport`             |
-| Compliance   | `ComplianceRuleRegistry`, `ComplianceContext` (Core), `ComplianceContextFactory`, `StackModuleRegistry` (Core) | `DotNetStackModule` → rules + test policy | `FrontendStackModule` → rules           |
+| Compliance   | `ComplianceRuleRegistry`, `ContractComplianceValidator`, `ComplianceContext` (Core), `ComplianceContextFactory`, `StackModuleRegistry` (Core) | `DotNetStackModule` → rules + test policy | `FrontendStackModule` → rules           |
 | Build        | `BuildValidationAgent`                                                                                         | `DotNetBuildValidationSupport`            | `FrontendBuildValidationSupport`        |
 | Recovery     | `RecoveryContextSupport`, `WorkflowFindingRules`                                                               | `CSharpCompilationFixSupport`             | proposed-files-only fallback            |
 | Test release | `TestReleasePolicySupport` (composite)                                                                         | `DotNetTestReleasePolicy` via module      | no policy yet (null on module)          |
@@ -646,9 +646,9 @@ workflowX.sln
 │   │   ├── WorkflowOrchestrator.cs, WorkflowOrchestrator.Recovery.cs, WorkflowOrchestrator.Completion.cs
 │   │   ├── WorkflowFindingRules.cs, RecoveryContextSupport.cs
 │   │   ├── AcceptanceCriteriaGate.cs, RequirementsSpecParser.cs, ArchitecturePlanParser.cs
-│   │   ├── TestReleasePolicySupport.cs, ContractComplianceValidator.cs
+│   │   ├── TestReleasePolicySupport.cs
 │   │   ├── Compliance/
-│   │   │   ├── ComplianceRuleRegistry.cs, ComplianceContextFactory.cs
+│   │   │   ├── ComplianceRuleRegistry.cs, ComplianceContextFactory.cs, ContractComplianceValidator.cs
 │   │   │   └── Rules/                      # shared compliance rules
 │   │   └── Stacks/
 │   │       └── StackModuleRegistration.cs
