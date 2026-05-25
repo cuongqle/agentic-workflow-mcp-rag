@@ -44,10 +44,32 @@ internal static class DotNetRepoContractDiscoverer
     internal static string? DetectCanonicalDirectoryForFileSuffix(
         string repoPath,
         string fileSuffix,
-        string? preferredDirectoryName = null)
+        string? preferredDirectoryName = null,
+        Func<string, bool>? fileNameFilter = null,
+        Func<string, bool>? relativeDirectoryFilter = null)
     {
         var matchingFiles = Directory.EnumerateFiles(repoPath, $"*{fileSuffix}", SearchOption.AllDirectories)
             .Where(path => !IsExcludedBuildPath(path))
+            .Where(path =>
+            {
+                string fileName = Path.GetFileName(path);
+                if (fileNameFilter is not null && !fileNameFilter(fileName))
+                {
+                    return false;
+                }
+
+                if (relativeDirectoryFilter is not null)
+                {
+                    string relativeDirectory = Path.GetRelativePath(repoPath, Path.GetDirectoryName(path) ?? string.Empty)
+                        .Replace('\\', '/');
+                    if (!relativeDirectoryFilter(relativeDirectory))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            })
             .ToList();
         if (matchingFiles.Count == 0)
         {
@@ -83,12 +105,22 @@ internal static class DotNetRepoContractDiscoverer
             rules,
             repoPath,
             "Repository.cs",
-            fileName => !fileName.StartsWith('I') && !fileName.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase));
+            fileName => IsRepositoryImplementationFileName(fileName),
+            relativeDirectory => !IsUnderInterfacesDirectory(relativeDirectory));
         AddPlacementRule(rules, repoPath, "Index.cs");
         AddPlacementRule(rules, repoPath, "Tests.cs");
 
-        string? interfacesDir = DetectCanonicalDirectoryForFileSuffix(repoPath, "Repository.cs", "Interfaces")
-                                  ?? DetectCanonicalDirectoryForFileSuffix(repoPath, "IRepository.cs", "Interfaces");
+        string? interfacesDir = DetectCanonicalDirectoryForFileSuffix(
+                                      repoPath,
+                                      "Repository.cs",
+                                      "Interfaces",
+                                      fileName => fileName.StartsWith('I') && !fileName.Equals("IRepository.cs", StringComparison.OrdinalIgnoreCase),
+                                      IsUnderInterfacesDirectory)
+                                  ?? DetectCanonicalDirectoryForFileSuffix(
+                                      repoPath,
+                                      "IRepository.cs",
+                                      "Interfaces",
+                                      relativeDirectoryFilter: IsUnderInterfacesDirectory);
         if (!string.IsNullOrWhiteSpace(interfacesDir))
         {
             rules.Add(new PathPlacementRule(
@@ -200,9 +232,14 @@ internal static class DotNetRepoContractDiscoverer
         List<PathPlacementRule> rules,
         string repoPath,
         string fileSuffix,
-        Func<string, bool>? fileFilter = null)
+        Func<string, bool>? fileFilter = null,
+        Func<string, bool>? relativeDirectoryFilter = null)
     {
-        string? directory = DetectCanonicalDirectoryForFileSuffix(repoPath, fileSuffix);
+        string? directory = DetectCanonicalDirectoryForFileSuffix(
+            repoPath,
+            fileSuffix,
+            fileNameFilter: fileFilter,
+            relativeDirectoryFilter: relativeDirectoryFilter);
         if (string.IsNullOrWhiteSpace(directory))
         {
             return;
@@ -218,6 +255,16 @@ internal static class DotNetRepoContractDiscoverer
 
         rules.Add(new PathPlacementRule(fileSuffix, directory, fileFilter));
     }
+
+    internal static bool IsRepositoryImplementationFileName(string fileName) =>
+        fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase)
+        && !fileName.StartsWith('I')
+        && !fileName.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsUnderInterfacesDirectory(string relativeDirectory) =>
+        relativeDirectory.Contains("/Interfaces", StringComparison.OrdinalIgnoreCase)
+        && (relativeDirectory.EndsWith("/Interfaces", StringComparison.OrdinalIgnoreCase)
+            || relativeDirectory.Contains("/Interfaces/", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsExcludedBuildPath(string absolutePath)
     {

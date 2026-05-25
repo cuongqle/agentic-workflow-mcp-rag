@@ -45,7 +45,9 @@ static class LayerConventionProfileBuilder
         foreach (string path in Directory.EnumerateFiles(repoPath, "*.cs", SearchOption.AllDirectories))
         {
             if (path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                || path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+                || path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
+                || DotNetRepoContractDiscoverer.IsUnderInterfacesDirectory(
+                    Path.GetRelativePath(repoPath, Path.GetDirectoryName(path) ?? string.Empty).Replace('\\', '/')))
             {
                 continue;
             }
@@ -98,6 +100,8 @@ static class LayerConventionProfileBuilder
                            || !Path.GetFileName(path).Equals(skipBaseFileName, StringComparison.OrdinalIgnoreCase))
             .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
                         && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !DotNetRepoContractDiscoverer.IsUnderInterfacesDirectory(
+                Path.GetRelativePath(repoPath, Path.GetDirectoryName(path) ?? string.Empty).Replace('\\', '/')))
             .Take(80)
             .ToList();
         if (files.Count < 2)

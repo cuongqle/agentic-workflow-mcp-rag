@@ -35,4 +35,31 @@ public class RepoContractCanonicalPathTests
 
         Assert.Equal(input, canonical);
     }
+
+    [Fact]
+    public void Discover_places_repository_implementations_outside_interfaces()
+    {
+        using TempRepo repo = new();
+        repo.WriteFile("SinglePageSample.Repository/EmployeeRepository.cs", "class EmployeeRepository {}");
+        repo.WriteFile("SinglePageSample.Repository/CompanyRepository.cs", "class CompanyRepository {}");
+        repo.WriteFile("SinglePageSample.Repository/Interfaces/IEmployeeRepository.cs", "interface IEmployeeRepository {}");
+        repo.WriteFile("SinglePageSample.Repository/Interfaces/ICompanyRepository.cs", "interface ICompanyRepository {}");
+        repo.WriteFile("SinglePageSample.Repository/Interfaces/IRepository.cs", "interface IRepository {}");
+
+        RepoContract contract = RepoContractDiscoverer.Discover(repo.Path);
+
+        string bare = contract.ResolveCanonicalRelativePath("TimesheetRepository.cs", string.Empty);
+        Assert.Equal("SinglePageSample.Repository/TimesheetRepository.cs", bare);
+
+        string misplaced = DotNetRepoContractSupport.ResolveCanonicalRelativePath(
+            contract,
+            "SinglePageSample.Repository/Interfaces/TimesheetRepository.cs",
+            string.Empty);
+        Assert.Equal("SinglePageSample.Repository/TimesheetRepository.cs", misplaced);
+
+        string iface = contract.ResolveCanonicalRelativePath(
+            "SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
+            string.Empty);
+        Assert.Equal("SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs", iface);
+    }
 }

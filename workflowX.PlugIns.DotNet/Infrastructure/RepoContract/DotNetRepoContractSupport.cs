@@ -22,4 +22,36 @@ internal static class DotNetRepoContractSupport
             RegistrationScope = signals.RegistrationScope
         };
     }
+
+    internal static string ResolveCanonicalRelativePath(RepoContract contract, string relativePath, string content)
+    {
+        relativePath = RemapMisplacedRepositoryImplementation(relativePath, contract);
+        return contract.ResolveCanonicalRelativePath(relativePath, content);
+    }
+
+    private static string RemapMisplacedRepositoryImplementation(string relativePath, RepoContract contract)
+    {
+        string normalized = relativePath.Replace('\\', '/').TrimStart('/');
+        string fileName = Path.GetFileName(normalized);
+        if (!DotNetRepoContractDiscoverer.IsRepositoryImplementationFileName(fileName))
+        {
+            return relativePath;
+        }
+
+        string? directory = Path.GetDirectoryName(normalized)?.Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(directory)
+            || !DotNetRepoContractDiscoverer.IsUnderInterfacesDirectory(directory))
+        {
+            return relativePath;
+        }
+
+        PathPlacementRule? implementationRule = contract.PathRules.FirstOrDefault(rule =>
+            rule.FileSuffix.Equals("Repository.cs", StringComparison.OrdinalIgnoreCase)
+            && rule.FileFilter is not null
+            && rule.FileFilter(fileName));
+
+        return implementationRule is null
+            ? relativePath
+            : $"{implementationRule.Directory}/{fileName}";
+    }
 }

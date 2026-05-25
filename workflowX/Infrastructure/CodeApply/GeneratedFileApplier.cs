@@ -145,7 +145,9 @@ static class GeneratedFileApplier
             return false;
         }
 
-        relativePath = ctx.Contract.ResolveCanonicalRelativePath(relativePath, generatedFile.Content);
+        relativePath = ctx.Stack.DotNetOr(
+            DotNetRepoContractSupport.ResolveCanonicalRelativePath(ctx.Contract, relativePath, generatedFile.Content),
+            ctx.Contract.ResolveCanonicalRelativePath(relativePath, generatedFile.Content));
         if (relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
             || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
         {

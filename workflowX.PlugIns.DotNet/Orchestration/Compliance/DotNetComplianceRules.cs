@@ -119,9 +119,13 @@ sealed class LayerContractComplianceRule : IComplianceRule
             }
         }
 
+        string normalizedImplPath = implPath.Replace('\\', '/');
         string? implementationContent = context.ProposedFiles
-            .FirstOrDefault(f => Path.GetFileName(f.RelativePath).Equals(expectedImplementationName, StringComparison.OrdinalIgnoreCase))
-            ?.Content;
+            .FirstOrDefault(f => f.RelativePath.Replace('\\', '/').Equals(normalizedImplPath, StringComparison.OrdinalIgnoreCase))
+            ?.Content
+            ?? context.ProposedFiles
+                .FirstOrDefault(f => Path.GetFileName(f.RelativePath).Equals(expectedImplementationName, StringComparison.OrdinalIgnoreCase))
+                ?.Content;
         if (string.IsNullOrWhiteSpace(implementationContent))
         {
             string? implementationPathInRepo = Directory
