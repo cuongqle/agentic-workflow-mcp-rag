@@ -133,30 +133,23 @@ sealed partial class WorkflowOrchestrator
 
         TestReleasePolicySupport.ApplyReleasePolicy(state);
 
-        if (TestReleasePolicySupport.ShouldAttemptQuarantine(state))
-        {
-            await TestReleasePolicySupport.TryQuarantineAsync(
-                state,
-                rollbackChanges,
-                _buildValidationAgent.ExecuteAsync,
-                _mcpAdapter.PublishStatusAsync,
-                cancellationToken);
-        }
-
         TestReleasePolicySupport.RefreshComplianceAuditFindings(state, pendingApplyRejections);
 
         if (AuditorAgent.HasBlockingFindings(state.Audit))
         {
             bool productionBuildPassed = state.BuildValidation?.ProductionBuildPassed == true;
-            if (!productionBuildPassed && state.BuildValidation is not null && state.BuildValidation.Findings.Count > 0 && rollbackChanges.Count > 0)
+            if (!productionBuildPassed
+                && state.BuildValidation is not null
+                && state.BuildValidation.Findings.Count > 0
+                && rollbackChanges.Count > 0)
             {
-                await GeneratedFileApplier.RollbackAsync(state.RepoPath, rollbackChanges.Values.ToList());
-                state.AddTimeline("Rolled back generated changes because production compilation remained failing.");
-                await _mcpAdapter.PublishStatusAsync("Rolled back generated changes due to unresolved production build failures.");
+                state.AddTimeline(
+                    "Production build still failing; applied changes preserved on disk for human review or resume (--from Recovering).");
+                await _mcpAdapter.PublishStatusAsync("Applied changes preserved; fix locally or resume workflow.");
             }
             else if (productionBuildPassed)
             {
-                state.AddTimeline("Production build passed; unresolved test-project issues were quarantined or downgraded.");
+                state.AddTimeline("Production build passed; unresolved test-project issues were downgraded where applicable.");
                 await _mcpAdapter.PublishStatusAsync("Proceeding with production changes despite unresolved test-project issues.");
             }
 

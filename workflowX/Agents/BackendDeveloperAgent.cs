@@ -45,6 +45,7 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
             - Otherwise implement every BACKEND_FILES entry; match responsibilities using RAG exemplars.
             - When the checklist includes *Tests.cs paths, implement unit tests by mirroring sibling *Tests.cs exemplars from RAG.
             - Complete source only: no stubs, TODO, NotImplementedException, or placeholder comments.
+            - Keep CLR types consistent across every layer and file you touch: mirror RAG exemplars so the same identifier, route/query parameter, property, and method signature use matching types end-to-end (never pass a value through layers with incompatible types).
 
             Unified RAG context:
             {state.CombinedRagContext}

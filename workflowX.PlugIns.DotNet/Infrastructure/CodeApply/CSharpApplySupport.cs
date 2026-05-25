@@ -107,7 +107,7 @@ internal static class CSharpApplySupport
             return false;
         }
 
-        if (!ValidateInterfaceCallParity(relativePath, trimmed, context.InterfaceCatalog, out reason))
+        if (!ValidateInterfaceCallParity(context, trimmed, out reason))
         {
             return false;
         }
@@ -605,34 +605,10 @@ internal static class CSharpApplySupport
         return true;
     }
 
-    private static bool ValidateInterfaceCallParity(
-        string relativePath, string content, InterfaceCatalog interfaceCatalog, out string reason)
+    private static bool ValidateInterfaceCallParity(ApplyContext context, string content, out string reason)
     {
-        reason = string.Empty;
-        var fieldTypeMap = Regex.Matches(content, @"(?:private|public|protected)\s+(?:readonly\s+)?(I[A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
-            .ToDictionary(m => m.Groups[2].Value, m => m.Groups[1].Value, StringComparer.Ordinal);
-
-        foreach (Match call in Regex.Matches(content, @"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\("))
-        {
-            string variable = call.Groups[1].Value;
-            string method = call.Groups[2].Value;
-            if (!fieldTypeMap.TryGetValue(variable, out string? iface))
-            {
-                continue;
-            }
-            if (!interfaceCatalog.TryGetMethods(iface, out var interfaceMethods))
-            {
-                continue;
-            }
-            if (!interfaceMethods.Contains(method))
-            {
-                string knownMembers = string.Join(", ", interfaceMethods.OrderBy(name => name, StringComparer.Ordinal).Take(12));
-                reason = $"Method call {variable}.{method}(...) is not defined on {iface}. Known members: {knownMembers}.";
-                return false;
-            }
-        }
-
-        return true;
+        var signatureCatalog = InterfaceCallSignatureGuard.BuildCatalog(context.RepoPath, context.GeneratedFiles);
+        return InterfaceCallSignatureGuard.TryValidate(content, signatureCatalog, out reason);
     }
 
     private static void PropagateInheritedRepositoryMethods(

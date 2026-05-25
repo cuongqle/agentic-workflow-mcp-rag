@@ -6,7 +6,8 @@ internal static class WorkflowStageResume
         stage switch
         {
             WorkflowStage.Queued => WorkflowStage.Requirements,
-            WorkflowStage.ReadyForPR or WorkflowStage.Done or WorkflowStage.Blocked => WorkflowStage.Requirements,
+            WorkflowStage.ReadyForPR or WorkflowStage.Done => WorkflowStage.Requirements,
+            WorkflowStage.Blocked => WorkflowStage.Recovering,
             _ => stage
         };
 

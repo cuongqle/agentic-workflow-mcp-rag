@@ -66,7 +66,9 @@ sealed partial class WorkflowOrchestrator
             string summary = string.Join(" | ", prBlockers);
             state.PullRequestStatus = $"PR skipped: {summary}";
             state.AddTimeline($"Pull request skipped ({prBlockers.Count} blocker(s)): {summary}");
-            await _mcpAdapter.PublishStatusAsync("Workflow finished with blockers; pull request skipped.");
+            state.AddTimeline(
+                "Workflow blocked with applied changes preserved. Review the target repo, then resume (e.g. --from Recovering).");
+            await _mcpAdapter.PublishStatusAsync("Workflow finished with blockers; changes preserved for human review/resume.");
         }
 
         if (!string.IsNullOrWhiteSpace(state.PullRequestStatus))

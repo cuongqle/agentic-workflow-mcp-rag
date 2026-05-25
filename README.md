@@ -270,6 +270,8 @@ If no checkpoint exists but `requirements.json` and `architecture-plan.json` are
 
 Valid `--from` stages: `Requirements`, `Planning`, `Implementing`, `Integrating`, `Auditing`, `Recovering`, `ValidatingAcceptance`.
 
+When the workflow finishes with blockers (`Stage = Blocked`), applied files stay on disk. Re-run to auto-resume at **Recovering**, or use `--from Recovering` / `--from Integrating` after local fixes.
+
 ---
 
 ## End-to-end flow
@@ -608,8 +610,8 @@ Handled by `TestReleasePolicySupport` → `DotNetTestReleasePolicySupport`:
 
 | Situation                         | Behavior                                                                                                                                                  |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Production projects fail          | Full rollback of generated changes; **PR blocker** (workflow continues to acceptance gate and artifacts).                                                 |
-| Only test project fails           | **Quarantine** `*Tests.cs` artifacts, defer test entity, downgrade to Medium findings, **keep production code**, continue toward PR if no other blockers. |
+| Production projects fail          | Applied changes **preserved** on disk for human review/resume; PR blocked (no automatic rollback). |
+| Only test project fails           | Findings downgraded where applicable via release policy; **test files are not rolled back**; production code kept. |
 | Production passes, tests deferred | Timeline notes deferred test gate; `DeferredTestEntities` skips future test generation pressure.                                                          |
 
 
