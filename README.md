@@ -8,7 +8,7 @@ The orchestrator is **stack-aware**: it discovers repo capabilities once, then r
 
 ## Solution layout
 
-Five projects; dependency flow is **Host → Core + PlugIns.DotNet + PlugIns.Frontend**, **PlugIns.* → Core**. Test projects mirror stack plug-ins plus a shared helpers library and host integration tests.
+Eight projects; dependency flow is **Host → Core + PlugIns.DotNet + PlugIns.Frontend**, **PlugIns.* → Core**. Test projects mirror stack plug-ins plus a shared helpers library and host integration tests.
 
 | Project | Role |
 |---------|------|
@@ -206,15 +206,10 @@ Edit `workflowX/appsettings.json`:
 
 ### 2. Build and test
 
+From the repository root:
+
 ```bash
-cd workflowX
 dotnet build workflowX.sln
-dotnet test
-```
-
-Or run all tests via the solution:
-
-```bash
 dotnet test workflowX.sln
 ```
 
@@ -556,8 +551,7 @@ Frontend-only repos skip test quarantine (no `*Tests.cs` convention).
 ## Project structure
 
 ```
-workflowX/
-├── workflowX.sln
+workflowX.sln
 ├── global.json
 ├── README.md
 │
@@ -623,10 +617,10 @@ workflowX/
 │       │   └── ApplyContentGuard.cs
 │       └── Git/, Kernel/
 │
-└── workflowX.Tests/                   # host/integration xUnit
-    ├── Infrastructure/
-    └── Orchestration/
-├── workflowX.Tests.Common/             # TempRepo, WorkflowStateBuilder, StackModuleTestSetup
+├── workflowX.Tests/                   # host/integration xUnit
+│   ├── Infrastructure/
+│   └── Orchestration/
+├── workflowX.Tests.Common/            # TempRepo, WorkflowStateBuilder, StackModuleTestSetup
 ├── workflowX.PlugIns.DotNet.Tests/
 └── workflowX.PlugIns.Frontend.Tests/
 ```
