@@ -14,7 +14,26 @@ internal sealed class WorkflowRunner
         McpClient mcpClient,
         CancellationToken cancellationToken = default)
     {
+        WorkflowCliArgs.ParsedArgs parsedArgs = WorkflowCliArgs.Parse(args, settings.DefaultTaskPrompt, settings.Resume);
         string repoPath = RepositoryResolver.Prepare(settings.RepoPath);
+        string taskPrompt = parsedArgs.TaskPrompt;
+        WorkflowResumeOptions resumeOptions = parsedArgs.ResumeOptions;
+
+        Console.WriteLine("\n=== Step 1: Resolving workflow state ===");
+        WorkflowState? workflowState = WorkflowStateCheckpointStore.TryLoad(repoPath, taskPrompt, resumeOptions);
+        bool resumed = workflowState is not null;
+        if (resumed)
+        {
+            Console.WriteLine($"Resuming from stage: {workflowState!.Stage}");
+        }
+        else if (resumeOptions.StartFromStage is WorkflowStage explicitStage)
+        {
+            Console.WriteLine($"Starting fresh workflow from explicit stage: {explicitStage}");
+        }
+        else
+        {
+            Console.WriteLine("Starting fresh workflow.");
+        }
 
         Console.WriteLine("\n=== Step 2: Building Local RAG Pipeline ===");
         RepoContract contract = RepoContractDiscoverer.Discover(repoPath);
@@ -35,17 +54,10 @@ internal sealed class WorkflowRunner
             Console.WriteLine($"[Warning] Path {repoPath} not found. Please clone the repository locally first.");
         }
 
-        Console.WriteLine("\n=== Step 4: Running Multi-Agent Development Workflow ===");
-        string taskPrompt = args.Length > 0 ? string.Join(' ', args) : settings.DefaultTaskPrompt;
-        RagContextBundle ragContext = await RagContextComposer.BuildAsync(repoPath, taskPrompt, ragIndex, contract);
-
-        var workflowState = new WorkflowState
+        workflowState ??= new WorkflowState
         {
             RepoPath = repoPath,
             Contract = contract,
-            ProjectStructureContext = ragContext.StructureContext,
-            LegacyImplementationContext = ragContext.LegacyImplementationContext,
-            CombinedRagContext = ragContext.CombinedContext,
             Task = new WorkflowTask
             {
                 Title = "New Development Task",
@@ -53,6 +65,29 @@ internal sealed class WorkflowRunner
             }
         };
 
+        workflowState.RepoPath = repoPath;
+        workflowState.Contract = contract;
+        if (!string.IsNullOrWhiteSpace(taskPrompt))
+        {
+            workflowState.Task = new WorkflowTask
+            {
+                Title = string.IsNullOrWhiteSpace(workflowState.Task.Title)
+                    ? "New Development Task"
+                    : workflowState.Task.Title,
+                Description = taskPrompt
+            };
+        }
+
+        if (!resumed || string.IsNullOrWhiteSpace(workflowState.CombinedRagContext))
+        {
+            Console.WriteLine("\n=== Step 3: Composing RAG context ===");
+            RagContextBundle ragContext = await RagContextComposer.BuildAsync(repoPath, taskPrompt, ragIndex, contract);
+            workflowState.ProjectStructureContext = ragContext.StructureContext;
+            workflowState.LegacyImplementationContext = ragContext.LegacyImplementationContext;
+            workflowState.CombinedRagContext = ragContext.CombinedContext;
+        }
+
+        Console.WriteLine("\n=== Step 4: Running Multi-Agent Development Workflow ===");
         var orchestrator = new WorkflowOrchestrator(
             new RequirementsAgent(kernel),
             new ArchitectureAgent(kernel),
@@ -69,6 +104,6 @@ internal sealed class WorkflowRunner
             settings.CompilationFixContext,
             settings.AcceptanceCriteria);
 
-        return await orchestrator.RunAsync(workflowState, cancellationToken);
+        return await orchestrator.RunAsync(workflowState, resumeOptions, cancellationToken);
     }
 }

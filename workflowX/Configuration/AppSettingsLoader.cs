@@ -30,6 +30,9 @@ public static class AppSettingsLoader
         bool acceptanceCriteriaEnabled = true;
         int acceptanceCriteriaMinimumCount = 1;
         bool acceptanceCriteriaRequireProductionBuildPass = true;
+        bool resumeFromCheckpoint = true;
+        WorkflowStage? resumeStartFromStage = null;
+        string? resumeCheckpointPath = null;
         string defaultTaskPrompt = "Implement a new feature safely with architecture-first planning and audited delivery.";
 
         if (root.TryGetProperty("Workflow", out var workflowNode))
@@ -94,6 +97,25 @@ public static class AppSettingsLoader
                 defaultTaskPrompt = defaultPromptNode.GetString()!;
             }
 
+            if (workflowNode.TryGetProperty("ResumeFromCheckpoint", out var resumeFromCheckpointNode)
+                && resumeFromCheckpointNode.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                resumeFromCheckpoint = resumeFromCheckpointNode.GetBoolean();
+            }
+
+            if (workflowNode.TryGetProperty("StartFromStage", out var startFromStageNode)
+                && !string.IsNullOrWhiteSpace(startFromStageNode.GetString())
+                && Enum.TryParse(startFromStageNode.GetString(), ignoreCase: true, out WorkflowStage parsedStartStage))
+            {
+                resumeStartFromStage = parsedStartStage;
+            }
+
+            if (workflowNode.TryGetProperty("CheckpointPath", out var checkpointPathNode)
+                && !string.IsNullOrWhiteSpace(checkpointPathNode.GetString()))
+            {
+                resumeCheckpointPath = checkpointPathNode.GetString();
+            }
+
             if (workflowNode.TryGetProperty("AcceptanceCriteria", out var acceptanceCriteriaNode))
             {
                 if (acceptanceCriteriaNode.TryGetProperty("Enabled", out var enabledNode)
@@ -146,6 +168,12 @@ public static class AppSettingsLoader
                 Enabled = acceptanceCriteriaEnabled,
                 MinimumCriteriaCount = acceptanceCriteriaMinimumCount,
                 RequireProductionBuildPass = acceptanceCriteriaRequireProductionBuildPass
+            },
+            Resume = new WorkflowResumeOptions
+            {
+                ResumeFromCheckpoint = resumeFromCheckpoint,
+                StartFromStage = resumeStartFromStage,
+                CheckpointPath = resumeCheckpointPath
             }
         };
     }

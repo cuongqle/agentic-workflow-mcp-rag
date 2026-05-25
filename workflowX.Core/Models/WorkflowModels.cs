@@ -56,11 +56,11 @@ public sealed class GeneratedFile
 
 public sealed class WorkflowState
 {
-    public WorkflowTask Task { get; init; } = new();
-    public string RepoPath { get; init; } = string.Empty;
-    public string ProjectStructureContext { get; init; } = string.Empty;
-    public string LegacyImplementationContext { get; init; } = string.Empty;
-    public string CombinedRagContext { get; init; } = string.Empty;
+    public WorkflowTask Task { get; set; } = new();
+    public string RepoPath { get; set; } = string.Empty;
+    public string ProjectStructureContext { get; set; } = string.Empty;
+    public string LegacyImplementationContext { get; set; } = string.Empty;
+    public string CombinedRagContext { get; set; } = string.Empty;
     public RepoContract? Contract { get; set; }
     public WorkflowStage Stage { get; set; } = WorkflowStage.Queued;
     public int RecoveryAttemptCount { get; set; }

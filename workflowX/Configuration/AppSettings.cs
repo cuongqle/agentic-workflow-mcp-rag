@@ -17,4 +17,5 @@ public sealed class AppSettings
     public bool AutoCreatePullRequest { get; init; } = true;
     public string PullRequestBaseBranch { get; init; } = "main";
     public AcceptanceCriteriaOptions AcceptanceCriteria { get; init; } = new();
+    public WorkflowResumeOptions Resume { get; init; } = new();
 }

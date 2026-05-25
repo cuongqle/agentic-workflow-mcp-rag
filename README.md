@@ -205,6 +205,8 @@ Edit `workflowX/appsettings.json`:
     "RagLexicalWeight": 0.55,
     "RagVectorWeight": 0.45,
     "DefaultTaskPrompt": "Your default task when no CLI args are passed.",
+    "ResumeFromCheckpoint": true,
+    "StartFromStage": null,
     "AutoCreatePullRequest": true,
     "PullRequestBaseBranch": "main",
     "AcceptanceCriteria": {
@@ -245,6 +247,28 @@ dotnet run --project workflowX/workflowX.csproj -- \
 ```
 
 If no CLI arguments are provided, `Workflow.DefaultTaskPrompt` from config is used.
+
+### Resume from checkpoint
+
+Each run saves `{target-repo}/workflowX-output/workflow-state.json` after every major stage. On the next run, if the task prompt matches the saved task hash, workflow resumes from the last saved stage instead of re-running requirements and planning.
+
+```bash
+# Resume automatically when checkpoint exists (default)
+dotnet run --project workflowX/workflowX.csproj
+
+# Force a fresh run
+dotnet run --project workflowX/workflowX.csproj -- --no-resume
+
+# Start from a specific stage (fresh state or checkpoint + override)
+dotnet run --project workflowX/workflowX.csproj -- --from Implementing
+
+# Resume from a custom checkpoint file
+dotnet run --project workflowX/workflowX.csproj -- --checkpoint /path/to/workflow-state.json
+```
+
+If no checkpoint exists but `requirements.json` and `architecture-plan.json` are present under `workflowX-output/`, the runner bootstraps state and resumes at **Implementing**.
+
+Valid `--from` stages: `Requirements`, `Planning`, `Implementing`, `Integrating`, `Auditing`, `Recovering`, `ValidatingAcceptance`.
 
 ---
 
@@ -654,6 +678,7 @@ workflowX.sln
 │   │       └── StackModuleRegistration.cs
 │   ├── Agents/                             # RequirementsAgent, ArchitectureAgent, AcceptanceCriteriaAgent, …
 │   └── Infrastructure/
+│       ├── Checkpoints/                    # WorkflowStateCheckpointStore, WorkflowStageResume, WorkflowCliArgs
 │       ├── Artifacts/WorkflowArtifactWriter.cs
 │       ├── RepoContract/                   # RepoContractDiscoverer, RepoContractComposer
 │       ├── Rag/RagContextComposer.cs, CodebaseRagIndex.cs
@@ -687,6 +712,9 @@ workflowX.sln
 | `Workflow:UseHybridRag`                                  | Enable lexical + vector retrieval.                                                     |
 | `Workflow:RagLexicalWeight` / `RagVectorWeight`          | Hybrid score weights (should sum ~1).                                                  |
 | `Workflow:DefaultTaskPrompt`                             | Task used when no CLI args.                                                            |
+| `Workflow:ResumeFromCheckpoint`                          | Load `workflow-state.json` when task hash matches (default `true`).                    |
+| `Workflow:StartFromStage`                                | Optional default stage override (`Implementing`, `Recovering`, etc.).                  |
+| `Workflow:CheckpointPath`                                | Optional custom checkpoint file path.                                                  |
 | `Workflow:AutoCreatePullRequest`                         | Create PR via MCP when no PR blockers remain.                                          |
 | `Workflow:PullRequestBaseBranch`                         | Base branch for PR (e.g. `main`).                                                      |
 | `Workflow:AcceptanceCriteria:Enabled`                    | Run acceptance criteria gate before finalization.                                      |
@@ -707,6 +735,7 @@ workflowX.sln
 
 | When written          | Files                                                                                                                                                                 |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| After each major stage | `workflow-state.json` (checkpoint for resume)                                                                                                                         |
 | After requirements    | `requirements.md`, `requirements.json`, `requirements-agent.md`                                                                                                       |
 | After architecture    | `architecture-plan.md`, `architecture-plan.json`, `architecture-agent.md`                                                                                             |
 | After acceptance gate | `acceptance-criteria-report.md`, `acceptance-criteria-report.json`, `acceptance-criteria-agent.md`                                                                    |
