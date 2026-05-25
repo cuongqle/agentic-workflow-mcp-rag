@@ -17,14 +17,14 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
         ValidateArchitectureDeliverables(
             context,
             WorkflowFindingRules.GetBackendPaths(context.State),
-            context.State.Backend?.ProposedFiles,
+            context.ProposedFiles,
             "BackendDeveloperAgent",
             findings);
 
         ValidateArchitectureDeliverables(
             context,
             WorkflowFindingRules.GetFrontendPaths(context.State),
-            context.State.Frontend?.ProposedFiles,
+            context.ProposedFiles,
             "FrontendDeveloperAgent",
             findings);
 
