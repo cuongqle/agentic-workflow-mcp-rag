@@ -18,6 +18,13 @@ public static class AppSettingsLoader
         string openAIEmbeddingModel = GetOptionalString(root, "OpenAI", "EmbeddingModel", "text-embedding-3-small");
         string githubPat = GetRequiredString(root, "GitHub", "Pat");
         string repoPath = GetRequiredString(root, "Repo", "Path");
+        string? repoCachePath = null;
+        if (root.TryGetProperty("Repo", out var repoNode)
+            && repoNode.TryGetProperty("CachePath", out var cachePathNode)
+            && !string.IsNullOrWhiteSpace(cachePathNode.GetString()))
+        {
+            repoCachePath = cachePathNode.GetString();
+        }
         int maxRecoveryAttempts = 2;
         int maxCompilationFixAttempts = 3;
         int compilationFixMaxContextChars = 200_000;
@@ -150,6 +157,7 @@ public static class AppSettingsLoader
             OpenAIEmbeddingModel = openAIEmbeddingModel,
             GitHubPat = githubPat,
             RepoPath = repoPath,
+            RepoCachePath = repoCachePath,
             MaxRecoveryAttempts = maxRecoveryAttempts,
             MaxCompilationFixAttempts = maxCompilationFixAttempts,
             UseHybridRag = useHybridRag,

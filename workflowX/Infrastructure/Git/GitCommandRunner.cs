@@ -30,4 +30,26 @@ public static class GitCommandRunner
                 $"Git command failed: git {arguments}\n{output}\n{error}");
         }
     }
+
+    public static bool TryRun(string arguments, out string stdout, out string stderr)
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+
+        process.Start();
+        stdout = process.StandardOutput.ReadToEnd();
+        stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return process.ExitCode == 0;
+    }
 }

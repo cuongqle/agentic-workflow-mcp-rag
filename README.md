@@ -218,7 +218,7 @@ Edit `workflowX/appsettings.json`:
 }
 ```
 
-`Repo.Path` can be a local directory or a remote URL (`https://...`, `git@...`). Remote repos are cloned into a local cache under `~/Library/Application Support/workflowX/repo-cache` (macOS).
+`Repo.Path` can be a local directory or a remote URL (`https://...`, `git@...`). Remote repos are cloned into `~/.workflowx/repo-cache` by default (override with `Repo.CachePath` or the `WORKFLOWX_REPO_CACHE` environment variable). The cache folder includes a `README.txt` with the resolved path.
 
 > **Security:** Do not commit real API keys. Use placeholders in git and keep secrets in a local-only `appsettings.Local.json` (ignored by `.gitignore`) if needed.
 

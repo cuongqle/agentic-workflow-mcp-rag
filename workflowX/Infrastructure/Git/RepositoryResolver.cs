@@ -1,27 +1,38 @@
-using System.Security.Cryptography;
-using System.Text;
-
 namespace workflowX.Infrastructure;
 
 public static class RepositoryResolver
 {
-    public static string Prepare(string configuredRepoPath)
+    public static string Prepare(string configuredRepoPath, string? configuredCachePath = null)
     {
         if (!IsRemoteRepository(configuredRepoPath))
         {
-            return configuredRepoPath;
+            string resolvedLocalRepo = Path.GetFullPath(configuredRepoPath);
+            Console.WriteLine($"Using local repository: {resolvedLocalRepo}");
+            return resolvedLocalRepo;
         }
 
-        string cacheRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "workflowX",
-            "repo-cache");
-        Directory.CreateDirectory(cacheRoot);
+        string cacheRoot = RepoCachePaths.ResolveCacheRoot(configuredCachePath);
+        RepoCachePaths.EnsureCacheRoot(cacheRoot);
 
-        string localPath = Path.Combine(cacheRoot, BuildRepoCacheFolderName(configuredRepoPath));
-        if (Directory.Exists(localPath) && Directory.Exists(Path.Combine(localPath, ".git")))
+        (string localPath, string? migratedFrom) = RepoCachePaths.ResolveWorkingCopy(
+            configuredRepoPath,
+            configuredCachePath);
+
+        Console.WriteLine();
+        Console.WriteLine("=== Repository ===");
+        Console.WriteLine($"Remote URL:     {configuredRepoPath}");
+        Console.WriteLine($"Cache root:     {cacheRoot}");
+        if (migratedFrom is not null)
         {
-            Console.WriteLine($"Refreshing cached repository: {configuredRepoPath}");
+            Console.WriteLine($"Migrated from:  {migratedFrom}");
+        }
+
+        Console.WriteLine($"Working copy:   {localPath}");
+        Console.WriteLine();
+
+        if (RepoCachePaths.HasGitCheckout(localPath))
+        {
+            Console.WriteLine("Refreshing cached repository...");
             GitCommandRunner.Run($"-C \"{localPath}\" pull --ff-only");
         }
         else
@@ -31,7 +42,8 @@ public static class RepositoryResolver
                 Directory.Delete(localPath, recursive: true);
             }
 
-            Console.WriteLine($"Cloning remote repository: {configuredRepoPath}");
+            Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+            Console.WriteLine("Cloning remote repository into cache...");
             GitCommandRunner.Run($"clone --depth 1 \"{configuredRepoPath}\" \"{localPath}\"");
         }
 
@@ -45,19 +57,4 @@ public static class RepositoryResolver
             || path.StartsWith("git@", StringComparison.OrdinalIgnoreCase)
             || path.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase);
     }
-
-    private static string BuildRepoCacheFolderName(string repoUrl)
-    {
-        string trimmed = repoUrl.TrimEnd('/');
-        string lastSegment = trimmed.Split('/').LastOrDefault() ?? "repo";
-        if (lastSegment.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-        {
-            lastSegment = lastSegment[..^4];
-        }
-
-        string safeName = string.Concat(lastSegment.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(repoUrl)))[..8].ToLowerInvariant();
-        return $"{safeName}-{hash}";
-    }
-
 }

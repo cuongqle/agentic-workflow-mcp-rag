@@ -35,6 +35,7 @@ internal sealed class WorkflowStateCheckpointData
     public List<string> DeferredTestEntities { get; set; } = new();
     public string? PullRequestUrl { get; set; }
     public string? PullRequestStatus { get; set; }
+    public string? FeatureBranchName { get; set; }
     public List<string> AppliedFiles { get; set; } = new();
     public List<string> Timeline { get; set; } = new();
 }
@@ -245,6 +246,7 @@ internal static class WorkflowStateCheckpointStore
             DeferredTestEntities = state.DeferredTestEntities.ToList(),
             PullRequestUrl = state.PullRequestUrl,
             PullRequestStatus = state.PullRequestStatus,
+            FeatureBranchName = state.FeatureBranchName,
             AppliedFiles = state.AppliedFiles.ToList(),
             Timeline = state.Timeline.ToList()
         };
@@ -261,7 +263,7 @@ internal static class WorkflowStateCheckpointStore
             CombinedRagContext = data.CombinedRagContext,
             Task = new WorkflowTask
             {
-                Title = string.IsNullOrWhiteSpace(data.TaskTitle) ? "Resumed Development Task" : data.TaskTitle,
+                Title = string.IsNullOrWhiteSpace(data.TaskTitle) ? "Development Task" : data.TaskTitle,
                 Description = data.TaskDescription
             },
             Requirements = FromAgentData(data.Requirements),
@@ -277,7 +279,8 @@ internal static class WorkflowStateCheckpointStore
             Recovery = FromAgentData(data.Recovery),
             CompilationFixExemplarContext = data.CompilationFixExemplarContext,
             PullRequestUrl = data.PullRequestUrl,
-            PullRequestStatus = data.PullRequestStatus
+            PullRequestStatus = data.PullRequestStatus,
+            FeatureBranchName = data.FeatureBranchName
         };
 
         state.CompilationFixAllowedFiles.AddRange(data.CompilationFixAllowedFiles);

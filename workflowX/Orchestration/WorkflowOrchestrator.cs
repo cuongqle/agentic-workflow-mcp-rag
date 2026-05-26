@@ -65,6 +65,7 @@ sealed partial class WorkflowOrchestrator
 
         state.AddTimeline("Workflow queued.");
         await _mcpAdapter.PublishStatusAsync($"Queued: {state.Task.Title}");
+        EnsureOnFeatureBranch(state);
 
         if (startFrom != WorkflowStage.Requirements && startFrom != WorkflowStage.Queued)
         {
@@ -82,6 +83,10 @@ sealed partial class WorkflowOrchestrator
         else
         {
             LogSkippedStage(state, WorkflowStage.Requirements);
+            if (startFrom >= WorkflowStage.Planning)
+            {
+                EnsureOnFeatureBranch(state);
+            }
         }
 
         if (WorkflowStageResume.ShouldRun(startFrom, WorkflowStage.Planning))

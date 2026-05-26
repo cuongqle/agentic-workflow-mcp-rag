@@ -9,6 +9,18 @@ sealed partial class WorkflowOrchestrator
     private void LogSkippedStage(WorkflowState state, WorkflowStage stage) =>
         state.AddTimeline($"Skipped {stage} (resumed from checkpoint).");
 
+    private void EnsureOnFeatureBranch(WorkflowState state)
+    {
+        string branch = _mcpAdapter.EnsureFeatureBranch(state);
+        if (string.IsNullOrWhiteSpace(branch))
+        {
+            state.AddTimeline("Feature branch not created; work may remain on the default branch.");
+            return;
+        }
+
+        state.AddTimeline($"Feature branch: {branch}");
+    }
+
     private async Task RunRequirementsStageAsync(WorkflowState state, CancellationToken cancellationToken)
     {
         state.Stage = WorkflowStage.Requirements;
@@ -39,12 +51,15 @@ sealed partial class WorkflowOrchestrator
 
         state.Requirements ??= requirementsResult;
         state.RequirementsSpec ??= requirementsResult.RequirementsSpec ?? RequirementsSpecParser.Resolve(requirementsResult);
+        WorkflowTaskNaming.RefineTaskFromRequirements(state);
+        EnsureOnFeatureBranch(state);
         state.Stage = WorkflowStage.Planning;
         SaveCheckpoint(state);
     }
 
     private async Task RunPlanningStageAsync(WorkflowState state, CancellationToken cancellationToken)
     {
+        EnsureOnFeatureBranch(state);
         state.Stage = WorkflowStage.Planning;
         state.AddTimeline("Architecture planning started.");
         var architectureResult = await _architectureAgent.ExecuteAsync(state, cancellationToken);
@@ -95,6 +110,7 @@ sealed partial class WorkflowOrchestrator
     {
         state.Stage = WorkflowStage.Implementing;
         state.AddTimeline("Implementation started.");
+        EnsureOnFeatureBranch(state);
         ImplementationScopeDetails scopeDetails = WorkflowFindingRules.ResolveImplementationScopeDetails(state);
         (bool runBackend, bool runFrontend) = scopeDetails.Scope;
         state.AddTimeline(WorkflowFindingRules.FormatImplementationScopeDiagnostics(scopeDetails));

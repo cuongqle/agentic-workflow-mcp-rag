@@ -7,6 +7,11 @@ public sealed class AppSettings
     public string OpenAIEmbeddingModel { get; init; } = "text-embedding-3-small";
     public string GitHubPat { get; init; } = string.Empty;
     public string RepoPath { get; init; } = string.Empty;
+    /// <summary>
+    /// Optional directory for cloning remote <see cref="RepoPath"/> URLs.
+    /// When unset, uses WORKFLOWX_REPO_CACHE or ~/.workflowx/repo-cache.
+    /// </summary>
+    public string? RepoCachePath { get; init; }
     public int MaxRecoveryAttempts { get; init; } = 2;
     public int MaxCompilationFixAttempts { get; init; } = 3;
     public CompilationFixContextOptions CompilationFixContext { get; init; } = new();

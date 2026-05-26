@@ -15,7 +15,7 @@ internal sealed class WorkflowRunner
         CancellationToken cancellationToken = default)
     {
         WorkflowCliArgs.ParsedArgs parsedArgs = WorkflowCliArgs.Parse(args, settings.DefaultTaskPrompt, settings.Resume);
-        string repoPath = RepositoryResolver.Prepare(settings.RepoPath);
+        string repoPath = RepositoryResolver.Prepare(settings.RepoPath, settings.RepoCachePath);
         string taskPrompt = parsedArgs.TaskPrompt;
         WorkflowResumeOptions resumeOptions = parsedArgs.ResumeOptions;
 
@@ -57,24 +57,21 @@ internal sealed class WorkflowRunner
         workflowState ??= new WorkflowState
         {
             RepoPath = repoPath,
-            Contract = contract,
-            Task = new WorkflowTask
-            {
-                Title = "New Development Task",
-                Description = taskPrompt
-            }
+            Contract = contract
         };
 
         workflowState.RepoPath = repoPath;
         workflowState.Contract = contract;
         if (!string.IsNullOrWhiteSpace(taskPrompt))
         {
+            WorkflowTaskNaming.ApplyPromptToTask(workflowState, taskPrompt);
+        }
+        else if (string.IsNullOrWhiteSpace(workflowState.Task.Title))
+        {
             workflowState.Task = new WorkflowTask
             {
-                Title = string.IsNullOrWhiteSpace(workflowState.Task.Title)
-                    ? "New Development Task"
-                    : workflowState.Task.Title,
-                Description = taskPrompt
+                Title = "Development Task",
+                Description = workflowState.Task.Description
             };
         }
 
