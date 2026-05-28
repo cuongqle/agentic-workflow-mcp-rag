@@ -1,23 +1,73 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using workflowX.Infrastructure;
 using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 sealed class AuditorAgent : LlmWorkflowAgentBase
 {
+    private const string JsonOutputSchema = """
+        Return strictly valid JSON (no markdown fences):
+        {
+          "summary": "short audit summary",
+          "findings": [
+            { "severity": "blocker|high|medium|low", "message": "specific issue" }
+          ]
+        }
+        """;
+
     public AuditorAgent(Kernel kernel) : base(kernel)
     {
     }
 
     public override string Name => "AuditorAgent";
 
+    public override async Task<AgentResult> ExecuteAsync(WorkflowState state, CancellationToken cancellationToken = default)
+    {
+        string summary;
+        List<AgentFinding> findings;
+        try
+        {
+            string prompt = BuildPrompt(state);
+            var chat = Kernel.GetRequiredService<IChatCompletionService>();
+            var history = new ChatHistory();
+            history.AddUserMessage(prompt);
+            var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: cancellationToken);
+            string raw = response.FirstOrDefault()?.Content ?? string.Empty;
+
+            if (TryParseAuditResponse(raw, out summary, out findings))
+            {
+                return new AgentResult
+                {
+                    AgentName = Name,
+                    Summary = summary,
+                    Findings = findings
+                };
+            }
+
+            summary = raw;
+            findings = new List<AgentFinding>(BuildFallbackFindings());
+        }
+        catch (Exception ex)
+        {
+            summary = $"Fallback output because LLM call failed in {Name}: {ex.Message}";
+            findings = new List<AgentFinding>(BuildFallbackFindings());
+        }
+
+        return new AgentResult
+        {
+            AgentName = Name,
+            Summary = summary,
+            Findings = findings
+        };
+    }
+
     protected override string BuildPrompt(WorkflowState state)
     {
-        string testCoverageRules = BuildTestCoverageRules(state);
         string buildStatus = BuildBuildValidationRules(state);
 
         return $"""
-            You are the auditor agent.
-            Review for bugs, regressions, security risks, and missing tests.
-            Focus on practical release-readiness.
+            You are the auditor agent. Review release readiness (bugs, security, missing tests).
 
             Architecture:
             {state.Architecture?.Summary}
@@ -31,20 +81,16 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
             Observer:
             {state.Observer?.Summary}
 
-            Unified RAG context:
+            RAG:
             {state.CombinedRagContext}
-
-            {testCoverageRules}
 
             {buildStatus}
 
-            Return findings with severity labels: blocker/high/medium/low.
-            Flag missing unit tests as high severity when new production code is introduced without a matching *Tests.cs file in the same test folders and naming style already used in this repository (repository, service, controller, domain, or other layers—discover from exemplars, not hard-coded names).
-            Treat failing or unrun tests as release blockers when the solution includes test projects.
-            Flag missing DI/bootstrap registration as high severity only for interface+implementation pairs newly introduced in proposed files that are not appended in the test/bootstrap file.
-            Flag registrations for interfaces already wired in bootstrap/composition-root files or protected contracts as high severity.
-            Flag rewriting or removing pre-existing DI registrations (InMemory/factory/lambda patterns for infrastructure already wired in the bootstrap file) as high severity — agents must append, not replace.
-            Flag any change to pre-existing interface/store contracts (adding SaveChanges, Update, DbContext-style APIs) as blocker — new code must adapt to existing store interfaces only.
+            Rules:
+            - Return findings only in JSON (see schema). Flag missing *Tests.cs for new production code as high when exemplars exist in RAG.
+            - Flag failing builds/tests as blocker or high.
+
+            {JsonOutputSchema}
             """;
     }
 
@@ -58,25 +104,94 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
         return result.Findings.Exists(f => f.Severity is FindingSeverity.Blocker or FindingSeverity.High);
     }
 
-    private static string BuildTestCoverageRules(WorkflowState state)
+    private static bool TryParseAuditResponse(string raw, out string summary, out List<AgentFinding> findings)
     {
-        var conventions = TestCoverageAuditor.DiscoverTestConventions(state.RepoPath);
-        if (conventions.Count == 0)
+        summary = raw;
+        findings = new List<AgentFinding>();
+        string candidate = ExtractJsonCandidate(raw);
+        try
         {
-            return "Test coverage rules: no *Tests.cs convention detected in target repository.";
+            using var document = JsonDocument.Parse(candidate);
+            JsonElement root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (root.TryGetProperty("summary", out JsonElement summaryNode) && summaryNode.ValueKind == JsonValueKind.String)
+            {
+                summary = summaryNode.GetString() ?? raw;
+            }
+
+            if (root.TryGetProperty("findings", out JsonElement findingsNode) && findingsNode.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement item in findingsNode.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    string message = item.TryGetProperty("message", out JsonElement messageNode)
+                        && messageNode.ValueKind == JsonValueKind.String
+                        ? messageNode.GetString() ?? string.Empty
+                        : string.Empty;
+                    if (string.IsNullOrWhiteSpace(message))
+                    {
+                        continue;
+                    }
+
+                    string severityText = item.TryGetProperty("severity", out JsonElement severityNode)
+                        && severityNode.ValueKind == JsonValueKind.String
+                        ? severityNode.GetString() ?? "medium"
+                        : "medium";
+
+                    findings.Add(new AgentFinding
+                    {
+                        Severity = ParseSeverity(severityText),
+                        Message = message.Trim()
+                    });
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static FindingSeverity ParseSeverity(string severityText) =>
+        severityText.Trim().ToLowerInvariant() switch
+        {
+            "blocker" => FindingSeverity.Blocker,
+            "high" => FindingSeverity.High,
+            "low" => FindingSeverity.Low,
+            _ => FindingSeverity.Medium
+        };
+
+    private static string ExtractJsonCandidate(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return raw;
         }
 
-        var lines = conventions
-            .Select(c => $"- {c.TestDirectory}: *{Path.GetFileNameWithoutExtension(c.ProductionFileSuffix)} → {{Name}}Tests.cs ({c.ExemplarCount} exemplar(s))")
-            .ToList();
+        Match fenced = Regex.Match(raw, "```(?:json)?\\s*(\\{[\\s\\S]*\\})\\s*```", RegexOptions.IgnoreCase);
+        if (fenced.Success && fenced.Groups.Count > 1)
+        {
+            return fenced.Groups[1].Value;
+        }
 
-        return $"""
-            Test coverage rules (discovered from repository):
-            {string.Join('\n', lines)}
-            - For each new production file that matches a discovered layer suffix, require a sibling test file named <ProductionBaseName>Tests.cs under the same test folder.
-            - Mirror existing test framework patterns (e.g. MSTest/xUnit/NUnit) from exemplar *Tests.cs files.
-            - Treat missing tests as high severity when exemplars already exist for that layer.
-            """;
+        int firstBrace = raw.IndexOf('{');
+        int lastBrace = raw.LastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace)
+        {
+            return raw.Substring(firstBrace, lastBrace - firstBrace + 1);
+        }
+
+        return raw;
     }
 
     private static string BuildBuildValidationRules(WorkflowState state)
@@ -90,16 +205,16 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
         string testsLine = testsPassed switch
         {
             true => "Automated tests: passed (dotnet test).",
-            false => "Automated tests: FAILED—treat as blocker/high until all tests pass.",
-            _ => "Automated tests: not executed (no test projects detected or skipped)."
+            false => "Automated tests: FAILED — add finding blocker or high.",
+            _ => "Automated tests: not executed — add finding high if test projects exist in RAG/solution."
         };
 
         string buildLine = state.BuildValidation.ProductionBuildPassed == true
             ? "Production build: passed."
-            : "Production build: failed or not verified.";
+            : "Production build: failed — add finding blocker or high.";
 
         return $"""
-            Build/test validation (deterministic):
+            Build/test validation:
             - {buildLine}
             - {testsLine}
             - Summary: {state.BuildValidation.Summary}
@@ -108,13 +223,13 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
 
     protected override IReadOnlyList<AgentFinding> BuildFallbackFindings()
     {
-        return new List<AgentFinding>
-        {
-            new()
+        return
+        [
+            new AgentFinding
             {
                 Severity = FindingSeverity.Medium,
                 Message = "Audit ran in fallback mode; run explicit regression tests before merge."
             }
-        };
+        ];
     }
 }

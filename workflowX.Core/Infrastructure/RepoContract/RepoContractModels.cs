@@ -53,63 +53,18 @@ public sealed class RepoContract
     public required string RepoPath { get; init; }
     public IReadOnlyList<PathPlacementRule> PathRules { get; init; } = Array.Empty<PathPlacementRule>();
     public FrontendModuleTemplate? Frontend { get; init; }
-    public LayerConventionProfiles LayerConventions { get; init; } = LayerConventionProfiles.Empty;
     public EntityConvention? Entity { get; init; }
     public string? RepositoryInterfacesNamespace { get; init; }
-    public IReadOnlyList<string> ConsumerSuffixes { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> CompositionRootPaths { get; init; } = Array.Empty<string>();
     public RegistrationScopeConvention RegistrationScope { get; init; } = RegistrationScopeConvention.None;
+    public bool HasDotNetProjects { get; init; }
 
     /// <summary>Discovered stacks — use <see cref="RepoStack.DotNet"/> / <see cref="RepoStack.Frontend"/> for routing.</summary>
     public RepoStack Stack => new(
-        RegistrationScope.IsDiscovered
-        || CompositionRootPaths.Count > 0
-        || LayerConventions.GetActiveProfiles().Any(),
+        HasDotNetProjects
+        || RegistrationScope.IsDiscovered
+        || CompositionRootPaths.Count > 0,
         Frontend is not null);
-
-    public string ResolveCanonicalRelativePath(string relativePath, string content)
-    {
-        string path = relativePath.Replace('\\', '/').TrimStart('/');
-        string fileName = Path.GetFileName(path);
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return path;
-        }
-
-        foreach (PathPlacementRule rule in PathRules.OrderByDescending(rule => rule.FileSuffix.Length))
-        {
-            if (!fileName.EndsWith(rule.FileSuffix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (rule.FileFilter is not null && !rule.FileFilter(fileName))
-            {
-                continue;
-            }
-
-            if (path.StartsWith(rule.Directory + "/", StringComparison.OrdinalIgnoreCase)
-                || path.Equals(rule.Directory, StringComparison.OrdinalIgnoreCase))
-            {
-                return path;
-            }
-
-            return $"{rule.Directory}/{fileName}";
-        }
-
-        if (Frontend is not null)
-        {
-            string? remapped = RemapForbiddenFrontendPath(path);
-            if (!string.IsNullOrWhiteSpace(remapped))
-            {
-                path = remapped;
-            }
-
-            path = NormalizeFeatureModuleRelativePath(path, content);
-        }
-
-        return path;
-    }
 
     public bool TryValidateFeatureModulePath(string relativePath, out string reason)
     {
@@ -325,15 +280,6 @@ public sealed class RepoContract
         {
             content.AppendLine(
                 $"- Entities: {Entity.CanonicalDirectory}/ must implement {Entity.RequiredInterface} (exemplar: {Entity.ExemplarRelativePath})");
-        }
-
-        foreach (var profile in LayerConventions.GetActiveProfiles())
-        {
-            string directory = string.IsNullOrWhiteSpace(profile.CanonicalDirectory)
-                ? "discovered from repo"
-                : profile.CanonicalDirectory;
-            content.AppendLine(
-                $"- Layer '{profile.RoleName}' (*{profile.FileSuffix}, {profile.SampleCount} samples, directory: {directory})");
         }
 
         foreach (var rule in PathRules.Take(12))

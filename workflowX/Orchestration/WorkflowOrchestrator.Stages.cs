@@ -188,8 +188,6 @@ sealed partial class WorkflowOrchestrator
             await _mcpAdapter.PublishStatusAsync($"Rejected {applyResult.RejectedFiles.Count} low-quality generated file(s).");
         }
 
-        await TryApplySynthesizedMissingTestsAsync(state, rollbackChanges, pendingApplyRejections);
-
         List<AgentFinding> complianceFindings =
             WorkflowFindingRules.CollectComplianceFindings(state, pendingApplyRejections);
         foreach (var finding in complianceFindings)

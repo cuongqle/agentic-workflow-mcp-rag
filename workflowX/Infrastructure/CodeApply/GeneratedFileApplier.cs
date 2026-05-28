@@ -22,7 +22,7 @@ static class GeneratedFileApplier
                 continue;
             }
 
-            string content = NormalizeContent(ctx, relativePath, generatedFile.Content);
+            string content = generatedFile.Content;
 
             if (!TryValidate(ctx, relativePath, content, existedBefore, existingOnDisk, out content, out string? validateReason))
             {
@@ -35,20 +35,6 @@ static class GeneratedFileApplier
             applied.Add(relativePath);
             appliedChanges.Add(new AppliedFileChange(relativePath, existedBefore, previousContent));
         }
-
-        foreach (string autoApplied in ctx.Stack.WhenDotNet(
-            DependencyWiringAuditor.ApplyMissingRegistrations(state)))
-        {
-            applied.Add(autoApplied);
-        }
-
-        ctx.Stack.WhenDotNet(() =>
-        {
-            foreach (string repaired in CompositionRootMerger.RepairCompositionRootFiles(ctx.RepoPath))
-            {
-                applied.Add(repaired);
-            }
-        });
 
         return Task.FromResult(new ApplyResult(applied, rejected, appliedChanges));
     }
@@ -63,19 +49,9 @@ static class GeneratedFileApplier
         return stack.DotNet
             ? CSharpApplySupport.OrderForApply(
                 files,
-                state.Contract?.LayerConventions ?? LayerConventionProfiles.Empty,
+                LayerConventionProfiles.Empty,
                 state.Contract)
             : files.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    private static string NormalizeContent(ApplyContext ctx, string relativePath, string content)
-    {
-        if (ctx.Stack.DotNet && CSharpApplySupport.IsDotNetSourcePath(relativePath))
-        {
-            return CSharpApplySupport.Normalize(ctx, relativePath, content);
-        }
-
-        return content;
     }
 
     private static bool TryValidate(
@@ -96,6 +72,17 @@ static class GeneratedFileApplier
             return false;
         }
 
+        if (!RecoveryOverwriteGuard.TryValidateOverwrite(
+                ctx.State,
+                ctx.RepoPath,
+                relativePath,
+                existedBefore,
+                out string overwriteReason))
+        {
+            reason = overwriteReason;
+            return false;
+        }
+
         if (!ArchitectureDeliverableScopeGuard.TryValidatePath(ctx.State, relativePath, ctx.Stack, out string scopeReason))
         {
             reason = scopeReason;
@@ -110,8 +97,7 @@ static class GeneratedFileApplier
                 return false;
             }
 
-            if (!CSharpApplySupport.TryValidateDotNet(
-                    ctx, relativePath, content, existedBefore, existingOnDisk, ref validatedContent, out reason))
+            if (!CSharpApplySupport.TryValidateDotNet(relativePath, validatedContent, out reason))
             {
                 return false;
             }
@@ -154,35 +140,12 @@ static class GeneratedFileApplier
             return false;
         }
 
-        relativePath = ctx.Stack.DotNetOr(
-            DotNetRepoContractSupport.ResolveCanonicalRelativePath(ctx.Contract, relativePath, generatedFile.Content),
-            ctx.Contract.ResolveCanonicalRelativePath(relativePath, generatedFile.Content));
+        relativePath = relativePath.TrimStart('/');
         if (relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
             || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
         {
             issue = "Rejected generated artifact path (obj/bin). Fix the owning project file instead.";
             return false;
-        }
-
-        string? declaredType = CSharpApplySupport.IsDotNetSourcePath(relativePath)
-            ? CSharpApplySupport.TryExtractDeclaredTypeName(generatedFile.Content)
-            : null;
-        if (!string.IsNullOrWhiteSpace(declaredType)
-            && ctx.DeclaredTypePaths.TryGetValue(declaredType, out string? priorPath))
-        {
-            relativePath = priorPath;
-        }
-
-        if (!TryResolveDuplicateToExistingPath(ctx, relativePath, generatedFile.Content, out relativePath, out issue))
-        {
-            issue ??= "Duplicate resolution failed.";
-            return false;
-        }
-
-        relativePath = relativePath.TrimStart('/');
-        if (!string.IsNullOrWhiteSpace(declaredType))
-        {
-            ctx.DeclaredTypePaths[declaredType] = relativePath;
         }
 
         fullPath = Path.GetFullPath(Path.Combine(ctx.RepoPath, relativePath));
@@ -214,135 +177,4 @@ static class GeneratedFileApplier
             .Concat(state.Frontend?.ProposedFiles ?? Enumerable.Empty<GeneratedFile>());
     }
 
-    private static bool TryResolveDuplicateToExistingPath(
-        ApplyContext ctx,
-        string relativePath,
-        string content,
-        out string resolvedRelativePath,
-        out string? issue)
-    {
-        resolvedRelativePath = relativePath.Replace('\\', '/').TrimStart('/');
-        issue = null;
-        string fileName = Path.GetFileName(resolvedRelativePath);
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return true;
-        }
-
-        if (ctx.Stack.DotNet
-            && fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-            && !CSharpApplySupport.TryResolveDeclaredTypePath(
-                ctx.RepoPath, resolvedRelativePath, content, ref resolvedRelativePath, out issue))
-        {
-            return false;
-        }
-
-        bool isClassLike = fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                           || fileName.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
-                           || fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
-                           || fileName.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase);
-        if (!isClassLike)
-        {
-            return true;
-        }
-
-        var existingMatches = Directory.EnumerateFiles(ctx.RepoPath, fileName, SearchOption.AllDirectories)
-            .Where(path => !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase))
-            .Select(path => Path.GetRelativePath(ctx.RepoPath, path).Replace('\\', '/'))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (existingMatches.Count == 0)
-        {
-            return true;
-        }
-
-        string resolvedPath = resolvedRelativePath;
-        if (existingMatches.Any(match => match.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
-
-        if (existingMatches.Count == 1)
-        {
-            resolvedRelativePath = existingMatches[0];
-            return true;
-        }
-
-        string className = Path.GetFileNameWithoutExtension(fileName);
-        var classTokenMatches = existingMatches
-            .Where(path =>
-            {
-                string absolute = Path.Combine(ctx.RepoPath, path.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(absolute))
-                {
-                    return false;
-                }
-
-                string existing = File.ReadAllText(absolute);
-                return existing.Contains($"class {className}", StringComparison.Ordinal)
-                       || existing.Contains($"interface {className}", StringComparison.Ordinal)
-                       || existing.Contains($"function {className}", StringComparison.Ordinal);
-            })
-            .ToList();
-
-        if (classTokenMatches.Count == 1)
-        {
-            resolvedRelativePath = classTokenMatches[0];
-            return true;
-        }
-
-        // Fall back to the closest directory match for duplicate file names
-        // (e.g. Program.cs in multiple projects). This avoids ambiguous rejections
-        // when the proposed relative path already carries useful folder context.
-        var scoredMatches = existingMatches
-            .Select(path => new
-            {
-                Path = path,
-                Score = ComputePathOverlapScore(resolvedPath, path)
-            })
-            .OrderByDescending(item => item.Score)
-            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (scoredMatches.Count > 0
-            && scoredMatches[0].Score > 0
-            && (scoredMatches.Count == 1 || scoredMatches[0].Score > scoredMatches[1].Score))
-        {
-            resolvedRelativePath = scoredMatches[0].Path;
-            return true;
-        }
-
-        issue = $"Ambiguous duplicate target for '{fileName}'. Existing candidates: {string.Join(", ", existingMatches)}";
-        return false;
-    }
-
-    private static int ComputePathOverlapScore(string proposedRelativePath, string existingRelativePath)
-    {
-        string proposedDir = (Path.GetDirectoryName(proposedRelativePath) ?? string.Empty).Replace('\\', '/');
-        string existingDir = (Path.GetDirectoryName(existingRelativePath) ?? string.Empty).Replace('\\', '/');
-        if (string.IsNullOrWhiteSpace(proposedDir) || string.IsNullOrWhiteSpace(existingDir))
-        {
-            return 0;
-        }
-
-        string[] proposedSegments = proposedDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        string[] existingSegments = existingDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        int i = proposedSegments.Length - 1;
-        int j = existingSegments.Length - 1;
-        int score = 0;
-        while (i >= 0 && j >= 0)
-        {
-            if (!proposedSegments[i].Equals(existingSegments[j], StringComparison.OrdinalIgnoreCase))
-            {
-                break;
-            }
-
-            score++;
-            i--;
-            j--;
-        }
-
-        return score;
-    }
 }

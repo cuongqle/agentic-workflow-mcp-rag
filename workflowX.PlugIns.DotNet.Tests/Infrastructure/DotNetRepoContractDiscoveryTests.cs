@@ -6,9 +6,10 @@ namespace workflowX.PlugIns.DotNet.Tests.Infrastructure;
 public class DotNetRepoContractDiscoveryTests
 {
     [Fact]
-    public void Discover_finds_dotnet_composition_root_bootstrapper()
+    public void Discover_detects_dotnet_projects_without_composition_root_scan()
     {
         using var repo = new TempRepo();
+        repo.WriteFile("src/Web/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
         repo.WriteFile(
             "src/Web/App_Start/Bootstrapper.cs",
             """
@@ -18,10 +19,9 @@ public class DotNetRepoContractDiscoveryTests
 
         RepoContract contract = RepoContractDiscoverer.Discover(repo.Path);
 
-        Assert.NotEmpty(contract.CompositionRootPaths);
-        Assert.Contains(
-            contract.CompositionRootPaths,
-            path => path.Contains("Bootstrapper.cs", StringComparison.OrdinalIgnoreCase));
+        Assert.True(contract.HasDotNetProjects);
+        Assert.True(contract.Stack.DotNet);
+        Assert.Empty(contract.CompositionRootPaths);
         Assert.False(contract.Stack.Frontend);
     }
 }

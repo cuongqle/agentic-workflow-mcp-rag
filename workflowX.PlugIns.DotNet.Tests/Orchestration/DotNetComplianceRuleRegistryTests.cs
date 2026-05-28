@@ -10,8 +10,8 @@ public class DotNetComplianceRuleRegistryTests
     {
         IReadOnlyList<IComplianceRule> rules = ComplianceRuleRegistry.For(new RepoStack(true, false));
 
-        Assert.True(rules.Count > 2);
-        Assert.Contains(rules, rule => rule.RuleId == "architecture.layer-contracts");
+        Assert.Contains(rules, rule => rule.RuleId == "architecture.deliverable-coverage");
+        Assert.DoesNotContain(rules, rule => rule.RuleId == "testing.missing-tests");
         Assert.DoesNotContain(rules, rule => rule.RuleId == "architecture.frontend-path-conventions");
     }
 }

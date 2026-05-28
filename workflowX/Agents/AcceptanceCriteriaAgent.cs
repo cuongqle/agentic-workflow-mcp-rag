@@ -77,11 +77,6 @@ sealed class AcceptanceCriteriaAgent : LlmWorkflowAgentBase
             ", ",
             WorkflowFindingRules.GetAllProposedFiles(state).Select(file => file.RelativePath));
 
-        IReadOnlyList<string> requiredTestPaths = MissingLayerTestSynthesizer.GetRequiredTestPaths(state);
-        string requiredTestPathsList = requiredTestPaths.Count == 0
-            ? "(none)"
-            : string.Join(", ", requiredTestPaths);
-
         return $"""
             You are the acceptance criteria agent.
             Decide whether the implemented change satisfies each acceptance criterion.
@@ -117,9 +112,6 @@ sealed class AcceptanceCriteriaAgent : LlmWorkflowAgentBase
 
             Proposed/generated file paths:
             {proposedFiles}
-
-            Required test file paths (from repo conventions and architecture):
-            {requiredTestPathsList}
 
             Rules:
             - Evaluate every listed acceptance criterion by id.

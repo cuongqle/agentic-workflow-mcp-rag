@@ -26,20 +26,10 @@ internal static class DotNetBuildValidationSupport
         }
 
         var fullBuild = RunBuild(repoPath, buildTarget);
-        bool productionPassed = ValidateProductionProjects(repoPath, out var productionFailures);
+        bool productionPassed = fullBuild.ExitCode == 0;
         var testRun = RunTests(repoPath, buildTarget);
 
         var findings = new List<AgentFinding>(fullBuild.Findings);
-        if (!productionPassed)
-        {
-            foreach (var productionFinding in productionFailures)
-            {
-                if (!findings.Any(existing => existing.Message.Equals(productionFinding.Message, StringComparison.Ordinal)))
-                {
-                    findings.Add(productionFinding);
-                }
-            }
-        }
 
         if (testRun.Ran && testRun.ExitCode != 0)
         {
@@ -55,11 +45,6 @@ internal static class DotNetBuildValidationSupport
         string summary = fullBuild.ExitCode == 0
             ? $".NET build validation passed for {NormalizePath(buildTarget)}."
             : $".NET build validation failed for {NormalizePath(buildTarget)}.";
-
-        if (fullBuild.ExitCode != 0 && productionPassed && BuildFailureClassifier.IsOnlyTestFailures(findings))
-        {
-            summary += " Production projects compile; remaining failures are test-project only.";
-        }
 
         if (testRun.Ran)
         {
@@ -134,7 +119,7 @@ internal static class DotNetBuildValidationSupport
     {
         return Directory
             .EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
-            .Any(path => BuildFailureClassifier.IsTestProjectPath(path));
+            .Any(path => Path.GetFileName(path).Contains("Test", StringComparison.OrdinalIgnoreCase));
     }
 
     private static List<AgentFinding> ExtractTestFailures(string stdout, string stderr)
@@ -184,48 +169,6 @@ internal static class DotNetBuildValidationSupport
         }
 
         return (process.ExitCode, findings);
-    }
-
-    private static bool ValidateProductionProjects(string repoPath, out List<AgentFinding> failures)
-    {
-        failures = new List<AgentFinding>();
-        IReadOnlyList<string> solutionProjects = SolutionProjectCatalog.GetSolutionProjectRelativePaths(repoPath);
-        var productionProjects = solutionProjects.Count > 0
-            ? solutionProjects
-                .Where(path => !BuildFailureClassifier.IsTestProjectPath(path))
-                .Select(path => Path.Combine(repoPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                .ToList()
-            : Directory
-                .EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
-                .Where(path => !path.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
-                            && !path.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                            && !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
-                            && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase))
-                .Where(path => !BuildFailureClassifier.IsTestProjectPath(path))
-                .OrderBy(path => path.Length)
-                .ToList();
-
-        if (productionProjects.Count == 0)
-        {
-            return true;
-        }
-
-        bool allPassed = true;
-        foreach (string projectPath in productionProjects)
-        {
-            var process = StartProcess("dotnet", $"build \"{projectPath}\" --nologo", repoPath);
-            process.Start();
-            string stdout = process.StandardOutput.ReadToEnd();
-            string stderr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-            {
-                allPassed = false;
-                failures.AddRange(ExtractBuildErrors(stdout, stderr));
-            }
-        }
-
-        return allPassed;
     }
 
     private static string? FindBuildTarget(string repoPath)

@@ -8,26 +8,17 @@ namespace workflowX.Infrastructure;
 internal static class RepoContractComposer
 {
     internal static RepoContractDiscovery Scan(string repoPath) =>
-        new(
-            DotNet: DotNetRepoContractDiscoverer.Discover(repoPath),
-            Frontend: FrontendRepoContractDiscoverer.Discover(repoPath));
+        new(Frontend: FrontendRepoContractDiscoverer.Discover(repoPath));
 
-    internal static RepoContract Compose(string repoPath, RepoContractDiscovery discovery) =>
+    internal static RepoContract Compose(string repoPath, RepoContractDiscovery discovery, bool hasDotNetProjects) =>
         new()
         {
             RepoPath = repoPath,
-            PathRules = discovery.DotNet.PathRules,
             Frontend = discovery.Frontend.ModuleTemplate,
-            LayerConventions = discovery.DotNet.LayerConventions,
-            Entity = discovery.DotNet.Entity,
-            RepositoryInterfacesNamespace = discovery.DotNet.RepositoryInterfacesNamespace,
-            ConsumerSuffixes = discovery.DotNet.ConsumerSuffixes,
-            CompositionRootPaths = discovery.DotNet.CompositionRootPaths,
-            RegistrationScope = discovery.DotNet.RegistrationScope
+            HasDotNetProjects = hasDotNetProjects,
         };
 }
 
 /// <summary>Per-stack discovery results before merge. Extend when adding Python, Go, etc.</summary>
 internal sealed record RepoContractDiscovery(
-    DotNetRepoContractSignals DotNet,
     FrontendRepoContractSignals Frontend);

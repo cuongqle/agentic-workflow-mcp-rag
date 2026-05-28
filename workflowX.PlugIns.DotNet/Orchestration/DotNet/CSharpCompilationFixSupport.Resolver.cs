@@ -46,7 +46,6 @@ static partial class CSharpCompilationFixSupport
 
         var declarationIndex = BuildTypeDeclarationIndex(state.RepoPath);
         ExpandWithBuildSymbolHints(state, files, declarationIndex);
-        ExpandInheritedTypesFromFindings(state.RepoPath, state.BuildValidation?.Findings, files, declarationIndex);
 
         if (files.Count == 0)
         {
@@ -355,32 +354,6 @@ static partial class CSharpCompilationFixSupport
         }
 
         BuildFailureClassifier.ExpandDeclarationPathsForTypes(state.RepoPath, typeNames, files, declarationIndex);
-    }
-
-    private static void ExpandInheritedTypesFromFindings(
-        string repoPath,
-        IReadOnlyList<AgentFinding>? buildFindings,
-        HashSet<string> files,
-        Dictionary<string, List<string>> declarationIndex)
-    {
-        foreach (var finding in buildFindings ?? Array.Empty<AgentFinding>())
-        {
-            foreach (string symbol in BuildFailureClassifier.ExtractTypeSymbolsFromMessage(finding.Message))
-            {
-                foreach (string inheritedType in ClassMemberAccessGuard.CollectInheritedTypeNames(repoPath, symbol))
-                {
-                    if (!declarationIndex.TryGetValue(inheritedType, out var declaringFiles))
-                    {
-                        continue;
-                    }
-
-                    foreach (string declaring in declaringFiles)
-                    {
-                        files.Add(declaring);
-                    }
-                }
-            }
-        }
     }
 
 }

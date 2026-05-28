@@ -20,6 +20,7 @@ internal static class WorkflowStateBuilder
         new()
         {
             RepoPath = repoPath,
+            HasDotNetProjects = stack.DotNet,
             PathRules =
             [
                 new PathPlacementRule(
@@ -42,22 +43,6 @@ internal static class WorkflowStateBuilder
                     ["module.js"],
                     [])
                 : null,
-            LayerConventions = stack.DotNet
-                ? new LayerConventionProfiles(
-                [
-                    new LayerConventionProfile(
-                        "repository",
-                        "Repository.cs",
-                        2,
-                        "src/Repositories",
-                        true,
-                        true,
-                        false,
-                        [],
-                        [],
-                        LayerInterfacePairingConvention.None)
-                ])
-                : LayerConventionProfiles.Empty
         };
 
     public static void WithBuildFindings(WorkflowState state, params AgentFinding[] findings) =>

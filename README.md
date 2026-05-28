@@ -10,6 +10,23 @@ The orchestrator **runs every stage to completion**; failures are recorded as PR
 
 The orchestrator is **stack-aware**: it discovers repo capabilities once, then routes apply, RAG, compliance, build validation, recovery, and test-release policy through thin generic facades into **DotNet** or **Frontend** plug-in assemblies.
 
+## Prompt-first migration (.NET)
+
+Several behaviors that used to live in deterministic discoverers, apply guards, and compliance auditors are now driven by **agent prompts** and **RAG text** (solution project list from `.sln`, `TestBootstrapContext`, shared placement rules).
+
+| Formerly in code (removed or empty) | Now enforced via |
+| ----------------------------------- | ---------------- |
+| `TestCoverageAuditor` / `testing.missing-tests` compliance rule | `AuditorAgent` prompt → JSON `findings[]` (`high` for missing `*Tests.cs`); `BackendDeveloperAgent` / `ArchitectureAgent` prompts |
+| `DotNetTestReleasePolicy` / test quarantine | Removed — fix failing tests through recovery prompts; no test-artifact rollback policy |
+| RAG task scoring + ranked exemplar categories (`AppendBackendExemplarCategories`) | Hybrid semantic RAG + solution project directories; agents copy exemplar paths from context |
+| Apply path canonicalization / `CompositionRootMerger` / layer apply guards | Agents emit final paths; apply is pass-through (+ existing scope/overwrite/syntax gates) |
+| `DotNetRepoContractDiscoverer` layer/path rules on contract | `ArchitectureAgent` + `CSharpProjectPlacementPromptSupport` + RAG solution projects |
+| `CodeExemplarContext.AppendDiscoveredExemplars` (task-scored snippets) | Dropped — semantic RAG + agent prompts |
+
+**Still deterministic (not moved to prompts):** `ArchitectureCoverageComplianceRule`, `ArchitectureDeliverableScopeGuard`, `dotnet build` / `dotnet test`, `BuildFailureClassifier`, `CSharpCompilationFixSupport` exemplar files for recovery.
+
+**Auditor wiring:** `AuditorAgent` returns parsed `findings[]`; `RefreshComplianceAuditFindings` keeps auditor **high** / **blocker** findings (not only low/medium) and merges compliance + build findings.
+
 ## Solution layout
 
 Eight projects; dependency flow is **Host → Core + PlugIns.DotNet + PlugIns.Frontend**, *PlugIns. → Core**. Test projects mirror stack plug-ins plus a shared helpers library and host integration tests.
@@ -18,7 +35,7 @@ Eight projects; dependency flow is **Host → Core + PlugIns.DotNet + PlugIns.Fr
 | Project                                | Role                                                                                                                                |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `**workflowX.Core`**                   | Shared contracts: `WorkflowState`, `RepoContract`, `RepoStack`, compliance/apply models, `IStackModule`, `StackModuleRegistry`      |
-| `**workflowX.PlugIns.DotNet**`         | .NET stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `DotNetPluginRegistration`       |
+| `**workflowX.PlugIns.DotNet**`         | .NET stack plug-in: apply shape checks, build validation, RAG/placement prompts, `DotNetPluginRegistration`                     |
 | `**workflowX.PlugIns.Frontend**`       | Frontend stack plug-in: apply guards, compliance rules, build validation, RAG context, repo discovery, `FrontendPluginRegistration` |
 | `**workflowX**`                        | Host executable: agents, orchestrator, generic routers (`GeneratedFileApplier`, `RagContextComposer`, …)                            |
 | `**workflowX.Tests**`                  | Host/integration xUnit tests (`RepoStack`, cross-stack orchestration)                                                               |
@@ -45,16 +62,16 @@ Host startup registers stack modules via `StackModuleRegistration.RegisterDefaul
 
 Given a task (e.g. “add a Timesheet entity like Employee”), the system:
 
-1. Discovers **RepoContract** (layers, frontend layout, DI scope, composition roots) and sets `**contract.Stack`**.
+1. Discovers **RepoContract** (lightweight stack flags + frontend template; placement/tests via prompts) and sets `**contract.Stack`**.
 2. Indexes and retrieves relevant code from the target repo (extensions and exemplars gated by stack).
 3. Runs **requirements intake** → structured **RequirementsSpec** with acceptance criteria.
 4. Plans architecture → structured **ArchitecturePlan** (JSON with backend/frontend file lists; markdown fallback).
 5. Generates backend and/or frontend files in parallel (scope from architecture plan + contract).
-6. Applies changes with stack-aware safety gates (C# guards only when `stack.DotNet`).
+6. Applies agent paths **pass-through** with scope/overwrite/syntax gates (no path remapping or DI merge).
 7. Runs deterministic compliance rules selected by stack (`ComplianceRuleRegistry.For(stack)`).
 8. Validates builds per stack (`.NET`: `dotnet build` / `dotnet test`; frontend: `npm run build`).
 9. Audits output and recovers from failures in a loop.
-10. For .NET repos: separates **production** vs **test** build failures so bad unit tests do not roll back good production code.
+10. Merges auditor JSON findings with compliance/build output (no DotNet test quarantine).
 11. Runs the **acceptance criteria gate** (deterministic checks + LLM validation against requirements).
 12. Writes workflow artifacts (always) and creates a GitHub PR via MCP **only when no blockers remain**.
 
@@ -67,12 +84,12 @@ Discovery happens **once** at bootstrap. Every downstream subsystem reads `RepoC
 ```
 RepoContractDiscoverer.Discover(repoPath)
   └── RepoContract
-        ├── Stack.DotNet     (DI scope, composition roots, layer conventions)
+        ├── Stack.DotNet     (*.csproj present)
         ├── Stack.Frontend   (frontend module template discovered)
         └── discovered data  (PathRules, Frontend template, LayerConventions, …)
 
 RepoStack routes at orchestration boundaries:
-  ├── ApplyContextFactory / GeneratedFileApplier     → PlugIns.DotNet (CSharpApplySupport, guards)
+  ├── ApplyContextFactory / GeneratedFileApplier     → PlugIns.DotNet (CSharpApplySupport — basic shape only)
   ├── RagContextComposer                             → PlugIns.DotNet/CSharpRagContextSupport + PlugIns.Frontend/FrontendRagContextSupport
   ├── StackModuleRegistry                            → IStackModule plug-ins (compliance + test-release per stack)
   ├── ComplianceRuleRegistry.For(stack)              → shared rules + active module compliance rules
@@ -84,12 +101,12 @@ RepoStack routes at orchestration boundaries:
 
 | Layer        | Generic (host / Core)                                                                                          | DotNet (`workflowX.PlugIns.DotNet`)       | Frontend (`workflowX.PlugIns.Frontend`) |
 | ------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------- |
-| Apply        | `ApplyContentGuard`, `ApplyContext` (Core), `ApplyContextFactory`, `GeneratedFileApplier`                      | `CSharpApplySupport`, guards, DI merge    | `FrontendApplyGuard`                    |
+| Apply        | `ApplyContentGuard`, `ApplyContext` (Core), `ApplyContextFactory`, `GeneratedFileApplier`                      | `CSharpApplySupport` (basic C# shape)     | `FrontendApplyGuard`                    |
 | RAG          | `RagContextComposer`, `RepoCodeFileScanner`                                                                    | `CSharpRagContextSupport`                 | `FrontendRagContextSupport`             |
 | Compliance   | `ComplianceRuleRegistry`, `ContractComplianceValidator`, `ComplianceContext` (Core), `ComplianceContextFactory`, `StackModuleRegistry` (Core) | `DotNetStackModule` → rules + test policy | `FrontendStackModule` → rules           |
 | Build        | `BuildValidationAgent`                                                                                         | `DotNetBuildValidationSupport`            | `FrontendBuildValidationSupport`        |
 | Recovery     | `RecoveryContextSupport`, `WorkflowFindingRules`                                                               | `CSharpCompilationFixSupport`             | proposed-files-only fallback            |
-| Test release | `TestReleasePolicySupport` (composite)                                                                         | `DotNetTestReleasePolicy` via module      | no policy yet (null on module)          |
+| Test release | `TestReleasePolicySupport` (composite)                                                                         | **null** (prompt-first; no quarantine)    | no policy yet (null on module)          |
 
 
 **Convention:** Stack-specific logic lives in `**workflowX.PlugIns.DotNet`** or `**workflowX.PlugIns.Frontend**` (namespaces `*.DotNet` / `*.Frontend`). Shared types and plug-in interfaces live in **Core**. Generic orchestrators stay in the **host** and route with `RepoStack` helpers (`WhenDotNet`, `WhenFrontend`, `DotNetOr`, …). See [RepoStack](#repostack) below.
@@ -121,7 +138,7 @@ readonly record struct RepoStack(bool DotNet, bool Frontend)
 
 | Flag             | True when                                                                                                                |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `Stack.DotNet`   | DI registration scope discovered, **or** composition roots exist, **or** at least one layer convention profile is active |
+| `Stack.DotNet`   | At least one `*.csproj` under the repo (excluding `bin`/`obj`)                                                          |
 | `Stack.Frontend` | A frontend module template was discovered (`Frontend is not null`)                                                       |
 
 
@@ -131,7 +148,7 @@ Unit tests: `workflowX.Tests/Infrastructure/RepoStackTests.cs`.
 
 ### Stack plug-ins (`IStackModule`)
 
-Stack-specific compliance and test-release policy register through `**StackModuleRegistry**` (Core) — host orchestrators never reference `DotNetComplianceRules` or `DotNetTestReleasePolicySupport` directly.
+Stack-specific compliance and test-release policy register through `**StackModuleRegistry**` (Core) — host orchestrators never reference plug-in rule types directly (`DotNetComplianceRules.All` is empty).
 
 ```
 ApplicationHost / tests
@@ -149,14 +166,14 @@ To add a stack: implement `IStackModule` in a new plug-in project (reference Cor
 
 ## Repository contract
 
-`RepoContractDiscoverer` scans the target repo once at startup. `**RepoContractComposer**` (host) merges per-stack discoverers — DotNet signals from `**DotNetRepoContractDiscoverer**` (PlugIns.DotNet), frontend from `**FrontendRepoContractDiscoverer**` (PlugIns.Frontend) — into `RepoContract` (Core). `**RepoContract.Stack**` is the routing entry point.
+`RepoContractDiscoverer` scans the target repo once at startup. `**RepoContractComposer**` merges frontend discovery (`**FrontendRepoContractDiscoverer**`) and sets `HasDotNetProjects` from `*.csproj` (no DotNet layer/path discoverer). `**RepoContract.Stack**` is the routing entry point.
 
 
 | Signal                              | Stored on contract                                                              | Used for                                                                                          |
 | ----------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `Stack.DotNet`                      | Derived (see above)                                                             | C# apply guards, DotNet compliance, `dotnet` build/test, compilation-fix context, test quarantine |
+| `Stack.DotNet`                      | `HasDotNetProjects`                                                             | C# apply shape checks, `dotnet` build/test, compilation-fix context, placement prompts            |
 | `Stack.Frontend`                    | Derived (`Frontend != null`)                                                    | Frontend RAG, path rules, `npm run build`                                                         |
-| Path rules, layers, DI scope, roots | `PathRules`, `LayerConventions`, `RegistrationScope`, `CompositionRootPaths`, … | Canonical paths, compliance, RAG exemplars, apply guards                                          |
+| Frontend template                   | `Frontend`                                                                      | Frontend compliance path rules                                                                    |
 
 
 Agents and compliance checks use this contract instead of hardcoded project-specific playbooks.
@@ -218,7 +235,7 @@ Edit `workflowX/appsettings.json`:
 }
 ```
 
-`Repo.Path` can be a local directory or a remote URL (`https://...`, `git@...`). Remote repos are cloned into `~/.workflowx/repo-cache` by default (override with `Repo.CachePath` or the `WORKFLOWX_REPO_CACHE` environment variable). The cache folder includes a `README.txt` with the resolved path.
+`Repo.Path` can be a local directory or a remote URL (`https://...`, `git@...`). Remote repos are cloned into a local cache under `~/Library/Application Support/workflowX/repo-cache` (macOS).
 
 > **Security:** Do not commit real API keys. Use placeholders in git and keep secrets in a local-only `appsettings.Local.json` (ignored by `.gitignore`) if needed.
 
@@ -335,20 +352,20 @@ Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilati
 | **2**  | `KernelFactory`                                      | Creates Semantic Kernel with OpenAI chat completion.                                                                                        |
 | **3**  | `GitHubMcpClientFactory`                             | Starts `@modelcontextprotocol/server-github` over stdio.                                                                                    |
 | **4**  | `RepositoryResolver`                                 | Uses local repo or clone/pull remote URL into cache.                                                                                        |
-| **5**  | `RepoContractDiscoverer`                             | Discovers layout, layers, frontend template → `WorkflowState.Contract`.                                                                     |
+| **5**  | `RepoContractDiscoverer`                             | Stack flags + frontend template → `WorkflowState.Contract`.                                                                                 |
 | **6**  | `CodebaseRagIndex`                                   | Scans stack-relevant extensions; builds lexical + vector index.                                                                             |
-| **7**  | `RagContextComposer`                                 | Structure + stack-specific exemplars + semantic retrieval → `CombinedRagContext`.                                                           |
+| **7**  | `RagContextComposer`                                 | Structure + hybrid retrieval + DotNet solution projects / test bootstrap text → `CombinedRagContext`.                                       |
 | **8**  | `RequirementsAgent`                                  | Task intake → `RequirementsSpec` with acceptance criteria; writes requirements artifacts.                                                   |
 | **9**  | `ArchitectureAgent`                                  | Plan → `ArchitecturePlan` JSON (backend/frontend file lists) with markdown fallback; writes architecture artifacts.                         |
 | **10** | `BackendDeveloperAgent` / `FrontendDeveloperAgent`   | Parallel JSON file generation (gated by `ResolveImplementationScope`).                                                                      |
-| **11** | `GeneratedFileApplier`                               | Canonical paths, C# guards when `stack.DotNet`, writes files.                                                                               |
+| **11** | `GeneratedFileApplier`                               | Pass-through paths; scope/overwrite/syntax validation; writes files.                                                                        |
 | **12** | `ComplianceRuleRegistry.For(stack)`                  | Shared + Frontend + DotNet rules → `ContractComplianceValidator`.                                                                           |
 | **13** | Recovery loop                                        | Up to `MaxCompilationFixAttempts`; context from `RecoveryContextSupport`.                                                                   |
 | **14** | `BuildValidationAgent`                               | Routes to DotNet and/or Frontend validators; merges results.                                                                                |
 | **15** | `ObserverAgent`                                      | Integration / cross-cutting review.                                                                                                         |
 | **16** | `AuditorAgent`                                       | LLM audit + merged compliance/build findings.                                                                                               |
-| **17** | Recovery loop                                        | Up to `MaxRecoveryAttempts`; same recovery path as step 13.                                                                                 |
-| **18** | `TestReleasePolicySupport`                           | DotNet: quarantine failing test artifacts, downgrade test-only audit findings.                                                              |
+| **17** | Recovery loop                                        | Up to `MaxRecoveryAttempts`; `RecoveryAgent` prompt includes blocking audit + RAG for missing tests.                                         |
+| **18** | `TestReleasePolicySupport`                           | Merges auditor + compliance + build findings (DotNet test policy is null).                                                                  |
 | **19** | Rollback (conditional)                               | Roll back generated changes when production build still fails after audit/recovery; workflow continues to acceptance gate and finalization. |
 | **20** | `AcceptanceCriteriaGate` + `AcceptanceCriteriaAgent` | Deterministic + LLM validation against requirements; writes acceptance artifacts.                                                           |
 | **21** | `FinalizeWorkflowAsync`                              | `CollectPullRequestBlockers` → full artifact set + timeline; PR only when blockers list is empty.                                           |
@@ -364,8 +381,7 @@ BackendDeveloperAgent / FrontendDeveloperAgent / RecoveryAgent
         ▼
 GeneratedFileApplier.ApplyAsync
         │  ApplyContextFactory.Create → RepoContract + RepoStack + catalogs (DotNet)
-        │  per file: canonical path → normalize → validate → write
-        │  post-pass (DotNet): DI wiring + composition-root repair
+        │  per file: pass-through path → validate → write (no remap / DI post-pass)
         ▼
 AppliedFileChange[] captured for rollback
         ▼
@@ -389,11 +405,9 @@ Stage selects the file set: implementation stages use backend/frontend proposals
 
 | Step                    | Purpose                                                                                                                                                                 |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Canonical path**      | Resolve LLM path to repo layout via `RepoContract`.                                                                                                                     |
-| **Normalize**           | C# cleanup when `stack.DotNet` (`CSharpApplySupport` in plug-in); auto-injects shared constructor deps from layer exemplars (e.g. `ICompanyRepository` on controllers). |
-| **Validate**            | Reject bad output before write — common shape, then stack-specific guards.                                                                                              |
+| **Path**                | Agent-relative path used as-is (trim, reject `bin`/`obj`, stay under repo root).                                                                                        |
+| **Validate**            | Common shape, `RecoveryOverwriteGuard`, `ArchitectureDeliverableScopeGuard`, basic C# / frontend checks.                                                                |
 | **Write**               | `File.WriteAllText` only when validation passes.                                                                                                                        |
-| **Post-apply (DotNet)** | Auto-add DI registrations; repair composition-root files.                                                                                                               |
 | **Track rollback**      | Record path, prior existence, and previous content in `AppliedFileChange`.                                                                                              |
 
 
@@ -404,7 +418,7 @@ Rejected files become compliance issues (`Apply rejected 'path': reason`) and ca
 
 | Stack        | Guards (examples)                                                                                                |
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
-| **DotNet**   | Layer conventions, interface parity, entity rules, composition-root merge-only, pre-existing contract protection |
+| **DotNet**   | Basic C# shape via `CSharpApplySupport` (placement/DI/tests via agent prompts)                                   |
 | **Frontend** | Basic JS/TS/HTML shape checks by extension                                                                       |
 | **Shared**   | Non-prose content, balanced braces, placeholder/stub rejection                                                   |
 
@@ -413,7 +427,6 @@ Rejected files become compliance issues (`Apply rejected 'path': reason`) and ca
 
 `GeneratedFileApplier.RollbackAsync` restores or deletes files using captured `AppliedFileChange` records:
 
-- **Test quarantine (DotNet):** rolls back only failing `*Tests.cs` artifacts; keeps production code.
 - **Final block:** rolls back all tracked changes when production build still fails after audit/recovery (PR blocker; workflow continues to acceptance gate and finalization).
 
 ### Workflow stages (`WorkflowStage`)
@@ -452,12 +465,12 @@ Multiple blockers are joined in `PullRequestStatus` (e.g. `PR skipped: unresolve
 | Agent                       | Role                                                                                               |
 | --------------------------- | -------------------------------------------------------------------------------------------------- |
 | **RequirementsAgent**       | Parses the task into a structured `RequirementsSpec` with testable acceptance criteria.            |
-| **ArchitectureAgent**       | High-level plan → `ArchitecturePlan` JSON (backend/frontend file paths, rationale, test strategy). |
-| **BackendDeveloperAgent**   | C# / API / repository / entity / test files (JSON output).                                         |
+| **ArchitectureAgent**       | `ArchitecturePlan` JSON — paths copied from RAG exemplars per layer (file name only); solution project names from RAG. |
+| **BackendDeveloperAgent**   | Implements plan paths; mirrors RAG; adds `*Tests.cs` when production files are added (prompt).   |
 | **FrontendDeveloperAgent**  | JS/TS/HTML/Angular-style files (JSON output).                                                      |
 | **BuildValidationAgent**    | Stack router: DotNet (`dotnet build` / `dotnet test`) and/or Frontend (`npm run build`).           |
 | **ObserverAgent**           | Post-build integration observation.                                                                |
-| **AuditorAgent**            | Release-readiness review; merges with deterministic findings.                                      |
+| **AuditorAgent**            | JSON `summary` + `findings[]`; missing `*Tests.cs` as **high** (prompt); findings merged in `RefreshComplianceAuditFindings`. |
 | **AcceptanceCriteriaAgent** | LLM validation of each acceptance criterion against workflow state (used by the gate).             |
 | **RecoveryAgent**           | Fixes build/apply failures using exemplar sources + contract (stack-aware error formatting).       |
 
@@ -479,7 +492,7 @@ Requirements artifacts are written immediately after intake so they remain avail
 
 ### Architecture plan
 
-`ArchitectureAgent` emits an `**ArchitecturePlan**` (`ArchitecturePlan.cs`) with explicit backend/frontend file paths. The orchestrator uses `GetBackendPaths(state)` / `GetFrontendPaths(state)` for implementation scope and compliance. Markdown output is still supported via `ArchitecturePlanParser`.
+`ArchitectureAgent` emits an `**ArchitecturePlan**` with explicit backend/frontend file paths. **Prompt-first:** each path should copy an existing RAG exemplar for that layer and change only the file name (use solution project folders from RAG — do not invent `.Api` when `.WebAPI` exists). Markdown fallback is supported via `ArchitecturePlanParser`.
 
 ### Acceptance criteria gate
 
@@ -570,7 +583,7 @@ Build-message parsing for DotNet recovery is centralized in `BuildFailureClassif
 - **Hybrid retrieval** (`UseHybridRag: true`):
   - **Lexical** — term overlap (`RagLexicalWeight`, default `0.55`).
   - **Vector** — OpenAI embeddings (`RagVectorWeight`, default `0.45`).
-- **Composer:** `RagContextComposer` merges structure, stack-specific rules/exemplars, and semantic queries from `CSharpRagContextSupport` / `FrontendRagContextSupport`.
+- **Composer:** `RagContextComposer` merges structure, hybrid semantic retrieval, and stack add-ons. **DotNet:** solution project dirs from `.sln` + `TestBootstrapContext` prompt text (no task-based file scoring or hard-coded controller excerpt blocks).
 
 Embeddings are held **in memory** for the run (not persisted to a vector DB).
 
@@ -585,9 +598,9 @@ Compliance runs without the LLM via `ContractComplianceValidator` and `Complianc
 
 | Scope        | Rules / checks                                                                                      |
 | ------------ | --------------------------------------------------------------------------------------------------- |
-| **Shared**   | Architecture coverage, protected contract files                                                     |
-| **DotNet**   | Layer contracts, path conventions, DI wiring, interface parity, missing unit tests, package restore |
-| **Frontend** | Frontend path conventions                                                                           |
+| **Shared**   | Architecture coverage (`ArchitectureCoverageComplianceRule`)                                        |
+| **DotNet**   | `DotNetComplianceRules.All` is empty — placement, tests, DI guidance via agent prompts + RAG        |
+| **Frontend** | Frontend path conventions (unchanged)                                                             |
 
 
 High/Blocker findings can trigger the recovery loop.
@@ -595,27 +608,15 @@ High/Blocker findings can trigger the recovery loop.
 
 | Check area       | Location                                      | What it enforces                                                |
 | ---------------- | --------------------------------------------- | --------------------------------------------------------------- |
-| Layer contracts  | `PlugIns.DotNet` → `DotNetComplianceRules`    | I*{Role} + implementation pairs                                 |
 | Path conventions | PlugIns.Frontend → `FrontendComplianceRules`  | Controllers, indexes, frontend module layout                    |
-| Missing tests    | `PlugIns.DotNet` → `TestCoverageAuditor`      | `*Tests.cs` per discovered layer                                |
-| File quality     | `GeneratedFileApplier` + `CSharpApplySupport` | C# shape, interface parity, member access (when `stack.DotNet`) |
-| Package restore  | `PlugIns.DotNet` → `ProjectPackageAuditor`    | Missing test NuGet packages after apply                         |
-| Bootstrap DI     | `PlugIns.DotNet` → `CompositionRootMerger`    | Appends `services.Add`* lines only                              |
+| Missing tests    | **Prompt** → `AuditorAgent`, `BackendDeveloperAgent`, `ArchitectureAgent` | `*Tests.cs` per layer when exemplars exist in RAG |
+| File quality     | `GeneratedFileApplier` + `CSharpApplySupport` | Basic C# shape (when `stack.DotNet`)                            |
+| DI / placement   | **Prompt** → `CSharpProjectPlacementPromptSupport`, `CSharpRecoveryPromptSupport`, RAG | Mirror exemplars; append bootstrap registrations |
 
 
 ### Production vs test build failures (DotNet)
 
-Handled by `TestReleasePolicySupport` → `DotNetTestReleasePolicySupport`:
-
-
-| Situation                         | Behavior                                                                                                                                                  |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Production projects fail          | Applied changes **preserved** on disk for human review/resume; PR blocked (no automatic rollback). |
-| Only test project fails           | Findings downgraded where applicable via release policy; **test files are not rolled back**; production code kept. |
-| Production passes, tests deferred | Timeline notes deferred test gate; `DeferredTestEntities` skips future test generation pressure.                                                          |
-
-
-Frontend-only repos skip test quarantine (no `*Tests.cs` convention).
+`DotNetStackModule.TestReleasePolicy` is **null** (test quarantine removed). Build/test outcomes come from `BuildValidationAgent`; missing or failing tests should be addressed via agent prompts and recovery, not a separate release policy.
 
 ---
 
@@ -642,15 +643,14 @@ workflowX.sln
 ├── workflowX.PlugIns.DotNet/          # .NET stack plug-in
 │   ├── DotNetPluginRegistration.cs         # entry: StackModuleRegistry.Register(DotNetStackModule)
 │   ├── Infrastructure/
-│   │   ├── CodeApply/                      # CSharpApplySupport, guards, CompositionRootMerger
-│   │   ├── Compliance/                     # auditors, layer pairing, DI discoverer
+│   │   ├── CodeApply/CSharpApplySupport.cs
+│   │   ├── Compliance/BuildFailureClassifier.cs, SolutionProjectCatalog.cs
 │   │   ├── BuildValidation/DotNetBuildValidationSupport.cs
-│   │   ├── Rag/CSharpRagContextSupport.cs
-│   │   └── RepoContract/DotNetRepoContractDiscoverer.cs
+│   │   └── Rag/CSharpRagContextSupport.cs
 │   └── Orchestration/
-│       ├── Stacks/DotNetStackModule.cs, DotNetTestReleasePolicy.cs
-│       ├── Compliance/DotNetComplianceRules.cs
-│       └── DotNet/CSharpCompilationFixSupport.*.cs, DotNetTestReleasePolicySupport.cs
+│       ├── Stacks/DotNetStackModule.cs
+│       ├── Compliance/DotNetComplianceRules.cs   # empty All[]
+│       └── DotNet/CSharpCompilationFixSupport.*.cs, CSharpProjectPlacementPromptSupport.cs
 │
 ├── workflowX.PlugIns.Frontend/        # Frontend stack plug-in
 │   ├── FrontendPluginRegistration.cs       # entry: StackModuleRegistry.Register(FrontendStackModule)

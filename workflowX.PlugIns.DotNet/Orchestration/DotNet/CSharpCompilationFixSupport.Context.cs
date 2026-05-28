@@ -10,7 +10,7 @@ static partial class CSharpCompilationFixSupport
     {
         options ??= new CompilationFixContextOptions();
         string repoPath = state.RepoPath;
-        RepoContract contract = DotNetRepoContractSupport.GetContract(state);
+        RepoContract contract = state.Contract ?? new RepoContract { RepoPath = state.RepoPath };
         var allowedPaths = state.CompilationFixAllowedFiles.Count > 0
             ? state.CompilationFixAllowedFiles
             : CSharpCompilationFixSupport.DetermineAllowedFiles(state);
@@ -19,14 +19,12 @@ static partial class CSharpCompilationFixSupport
             ? state.BuildValidation.Findings
             : Array.Empty<AgentFinding>();
         var errorPaths = BuildFailureClassifier.CollectSourcePathsFromFindings(buildFindings, repoPath);
-        AddContractExemplarPaths(pathSet, errorPaths, contract, repoPath);
+        AddContractExemplarPaths(pathSet, contract);
 
-        LayerConventionProfiles conventions = contract.LayerConventions;
         HashSet<string> mandatoryPaths = BuildMandatoryPaths(
             repoPath,
             errorPaths,
-            contract,
-            conventions);
+            contract);
 
         var optionalPaths = pathSet
             .Where(path => !mandatoryPaths.Contains(path))
@@ -104,8 +102,7 @@ static partial class CSharpCompilationFixSupport
     private static HashSet<string> BuildMandatoryPaths(
         string repoPath,
         HashSet<string> errorPaths,
-        RepoContract contract,
-        LayerConventionProfiles conventions)
+        RepoContract contract)
     {
         var mandatory = new HashSet<string>(errorPaths, StringComparer.OrdinalIgnoreCase);
 
@@ -116,12 +113,6 @@ static partial class CSharpCompilationFixSupport
 
         foreach (string errorPath in errorPaths)
         {
-            string? layerExemplar = FindLayerExemplarInDirectory(repoPath, errorPath, conventions);
-            if (!string.IsNullOrWhiteSpace(layerExemplar))
-            {
-                mandatory.Add(layerExemplar);
-            }
-
             AddErrorDirectorySiblings(repoPath, errorPath, mandatory);
         }
 
@@ -154,12 +145,11 @@ static partial class CSharpCompilationFixSupport
         HashSet<string> errorPaths,
         RepoContract contract)
     {
-        LayerConventionProfiles conventions = contract.LayerConventions;
         return allowed
             .Select(path => new
             {
                 Path = path,
-                Score = ScorePath(path, errorPaths, contract, conventions, state.RepoPath)
+                Score = ScorePath(path, errorPaths, contract)
             })
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Path.Length)
@@ -169,9 +159,7 @@ static partial class CSharpCompilationFixSupport
     private static int ScorePath(
         string relativePath,
         HashSet<string> errorPaths,
-        RepoContract contract,
-        LayerConventionProfiles conventions,
-        string repoPath)
+        RepoContract contract)
     {
         int score = 0;
         if (errorPaths.Contains(relativePath))
@@ -190,13 +178,6 @@ static partial class CSharpCompilationFixSupport
             {
                 score += 40;
             }
-        }
-
-        if (conventions.ResolveByPath(relativePath) is LayerConventionProfile profile
-            && !string.IsNullOrWhiteSpace(profile.CanonicalDirectory)
-            && relativePath.StartsWith(profile.CanonicalDirectory + "/", StringComparison.OrdinalIgnoreCase))
-        {
-            score += 35;
         }
 
         foreach (string errorPath in errorPaths)
@@ -222,60 +203,14 @@ static partial class CSharpCompilationFixSupport
             score += 25;
         }
 
-        string? layerExemplar = FindLayerExemplarInDirectory(repoPath, relativePath, conventions);
-        if (!string.IsNullOrWhiteSpace(layerExemplar)
-            && layerExemplar.Equals(relativePath, StringComparison.OrdinalIgnoreCase))
-        {
-            score += 85;
-        }
-
         return score;
     }
 
-    private static string? FindLayerExemplarInDirectory(
-        string repoPath,
-        string relativePath,
-        LayerConventionProfiles conventions)
-    {
-        LayerConventionProfile? profile = conventions.ResolveByPath(relativePath);
-        if (profile is null || string.IsNullOrWhiteSpace(profile.CanonicalDirectory))
-        {
-            return null;
-        }
-
-        string directory = Path.Combine(repoPath, profile.CanonicalDirectory.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(directory))
-        {
-            return null;
-        }
-
-        return Directory
-            .EnumerateFiles(directory, $"*{profile.FileSuffix}", SearchOption.TopDirectoryOnly)
-            .Where(path => !Path.GetFileName(path).StartsWith('I'))
-            .Where(path => !path.Contains("Test", StringComparison.OrdinalIgnoreCase))
-            .Select(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'))
-            .FirstOrDefault(path => !path.Equals(relativePath, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static void AddContractExemplarPaths(
-        HashSet<string> paths,
-        HashSet<string> errorPaths,
-        RepoContract contract,
-        string repoPath)
+    private static void AddContractExemplarPaths(HashSet<string> paths, RepoContract contract)
     {
         if (!string.IsNullOrWhiteSpace(contract.Entity?.ExemplarRelativePath))
         {
             paths.Add(contract.Entity.ExemplarRelativePath);
-        }
-
-        LayerConventionProfiles conventions = contract.LayerConventions;
-        foreach (string errorPath in errorPaths)
-        {
-            string? layerExemplar = FindLayerExemplarInDirectory(repoPath, errorPath, conventions);
-            if (!string.IsNullOrWhiteSpace(layerExemplar))
-            {
-                paths.Add(layerExemplar);
-            }
         }
     }
 

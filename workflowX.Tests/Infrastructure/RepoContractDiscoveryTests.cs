@@ -33,11 +33,12 @@ public class RepoContractDiscoveryTests
         using var repo = new TempRepo();
         repo.WriteFile("web/modules/employee/controllers/a.js", "const x = 1;");
         repo.WriteFile("web/modules/employee/views/a.html", "<p></p>");
-        repo.WriteFile("src/App/Startup.cs", "// startup");
+        repo.WriteFile("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
 
         RepoContract contract = RepoContractDiscoverer.Discover(repo.Path);
 
         Assert.True(contract.Stack.Frontend);
         Assert.True(contract.Stack.DotNet);
+        Assert.True(contract.HasDotNetProjects);
     }
 }

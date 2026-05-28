@@ -43,8 +43,6 @@ sealed partial class WorkflowOrchestrator
                     WorkflowFindingRules.FormatApplyRejectionComplianceIssue(rejected.RelativePath, rejected.Reason));
             }
 
-            RecordNuGetPackageChanges(state);
-
             state.BuildValidation = await _buildValidationAgent.ExecuteAsync(state, cancellationToken);
             if (!WorkflowFindingRules.HasActionableBuildFindings(state))
             {
@@ -79,19 +77,9 @@ sealed partial class WorkflowOrchestrator
             _compilationFixContextOptions,
             state.AddTimeline);
 
+    // Prompt-first mode: disable automatic package mutation in orchestrator.
     private static void RecordNuGetPackageChanges(WorkflowState state)
     {
-        if (state.Contract is { Stack.DotNet: false })
-        {
-            return;
-        }
-
-        foreach (string packageChange in ProjectPackageAuditor.EnsureMissingPackages(
-                     state.RepoPath,
-                     state.BuildValidation?.Findings,
-                     WorkflowFindingRules.GetAllProposedFiles(state)))
-        {
-            state.AddTimeline($"NuGet restore: {packageChange}");
-        }
     }
+
 }

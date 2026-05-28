@@ -9,12 +9,12 @@ internal static class FrontendRagContextSupport
 {
     internal static void AppendImplementationContext(
         StringBuilder sb,
-        IReadOnlyList<string> rankedPaths,
+        IReadOnlyList<string> candidatePaths,
         RepoContract contract,
         string repoPath)
     {
-        AppendCategory(sb, "Frontend UI modules", rankedPaths, path => IsFrontendModulePath(path, contract), repoPath);
-        AppendCategory(sb, "Frontend tests", rankedPaths, path =>
+        AppendCategory(sb, "Frontend UI modules", candidatePaths, path => IsFrontendModulePath(path, contract), repoPath);
+        AppendCategory(sb, "Frontend tests", candidatePaths, path =>
             path.Contains(".spec.", StringComparison.OrdinalIgnoreCase)
             || path.Contains(".test.", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith("Tests.js", StringComparison.OrdinalIgnoreCase)
@@ -25,41 +25,6 @@ internal static class FrontendRagContextSupport
     {
         yield return "angular module controller service view proxy patterns";
         yield return "frontend component routing bootstrap loader";
-    }
-
-    internal static int ScoreFrontendPath(string normalizedPath, FrontendModuleTemplate frontend)
-    {
-        int score = 0;
-        if (normalizedPath.StartsWith(frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.StartsWith(frontend.WebProjectRoot + "/", StringComparison.OrdinalIgnoreCase))
-        {
-            score += 40;
-        }
-
-        if (frontend.LayoutMode == FrontendLayoutMode.HostModulePages)
-        {
-            string hostPrefix = $"{frontend.ModulesRoot}/{frontend.ExemplarModuleName}/";
-            if (normalizedPath.StartsWith(hostPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 30;
-            }
-            else if (normalizedPath.StartsWith(frontend.ModulesRoot + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                score -= 50;
-            }
-        }
-
-        if (frontend.ForbiddenRoots.Any(root => normalizedPath.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase)))
-        {
-            score -= 80;
-        }
-
-        if (normalizedPath.Contains("/controllers/", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("/services/", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("/views/", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("/proxies/", StringComparison.OrdinalIgnoreCase)) score += 8;
-
-        return score;
     }
 
     internal static bool IsFrontendModulePath(string path, RepoContract contract)
@@ -98,7 +63,13 @@ internal static class FrontendRagContextSupport
 
     private static void AppendCategory(StringBuilder sb, string title, IEnumerable<string> paths, Func<string, bool> predicate, string repoPath)
     {
-        var selected = paths.Where(predicate).Take(3).ToList();
+        var selected = paths
+            .Where(predicate)
+            .Select(path => (Absolute: path, Relative: Path.GetRelativePath(repoPath, path).Replace('\\', '/')))
+            .OrderBy(x => x.Relative, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(x => x.Absolute)
+            .ToList();
         if (selected.Count == 0)
         {
             return;

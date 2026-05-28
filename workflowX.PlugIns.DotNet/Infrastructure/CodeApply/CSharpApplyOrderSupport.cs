@@ -217,9 +217,14 @@ internal static class CSharpApplyOrderSupport
             return false;
         }
 
-        return DotNetRepoContractDiscoverer.IsUnderInterfacesDirectory(normalizedPath)
+        return IsUnderInterfacesDirectory(normalizedPath)
                || char.IsUpper(fileName[1]);
     }
+
+    private static bool IsUnderInterfacesDirectory(string relativeDirectory) =>
+        relativeDirectory.Contains("/Interfaces", StringComparison.OrdinalIgnoreCase)
+        && (relativeDirectory.EndsWith("/Interfaces", StringComparison.OrdinalIgnoreCase)
+            || relativeDirectory.Contains("/Interfaces/", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsEntityPath(string normalizedPath, string fileName, RepoContract? contract)
     {

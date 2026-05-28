@@ -44,20 +44,6 @@ public class ArchitectureDeliverableMatcherTests
                 "IEntity",
                 "SinglePageSample.Repository/Entities/Company.cs",
                 null),
-            LayerConventions = new LayerConventionProfiles(
-            [
-                new LayerConventionProfile(
-                    RoleName: "Repository",
-                    FileSuffix: "Repository.cs",
-                    SampleCount: 2,
-                    CanonicalDirectory: "SinglePageSample.Repository",
-                    RequireInheritanceClause: false,
-                    RequireMatchingRoleInterface: false,
-                    RequireBaseConstructorCall: false,
-                    RequiredInheritedTypeTokens: Array.Empty<string>(),
-                    RequiredConstructorParamTypes: Array.Empty<string>(),
-                    InterfacePairing: LayerInterfacePairingConvention.None)
-            ]),
             PathRules =
             [
                 new PathPlacementRule("Index.cs", "SinglePageSample.Repository/Indexes", null)
@@ -74,6 +60,15 @@ public class ArchitectureDeliverableMatcherTests
             "SinglePageSample/SinglePageSample.Repository/Indexes/TimesheetIndex.cs",
             allowed,
             contract));
+    }
+
+    [Fact]
+    public void PathsMatch_does_not_equate_different_project_segments_with_same_filename()
+    {
+        const string planned = "SinglePageSample/SinglePageSample.Api/Controllers/TimesheetController.cs";
+        const string proposed = "SinglePageSample/SinglePageSample.WebAPI/Controllers/TimesheetController.cs";
+
+        Assert.False(ArchitectureDeliverableMatcher.PathsMatch(proposed, planned));
     }
 
     [Fact]

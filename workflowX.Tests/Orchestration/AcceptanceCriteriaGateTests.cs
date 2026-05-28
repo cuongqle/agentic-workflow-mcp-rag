@@ -159,7 +159,11 @@ public class AcceptanceCriteriaGateTests
         };
         state.ArchitecturePlan = new ArchitecturePlan
         {
-            BackendFiles = [new ArchitectureDeliverable("SinglePageSample.Repository/TimesheetRepository.cs")]
+            BackendFiles =
+            [
+                new ArchitectureDeliverable("SinglePageSample.Repository/TimesheetRepository.cs"),
+                new ArchitectureDeliverable("SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs")
+            ]
         };
         state.AppliedFiles.Add("SinglePageSample.Repository/TimesheetRepository.cs");
         state.AppliedFiles.Add("SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs");

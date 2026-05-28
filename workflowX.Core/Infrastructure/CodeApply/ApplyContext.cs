@@ -10,15 +10,12 @@ public sealed class ApplyContext
     public string RepoRoot { get; }
     public RepoContract Contract { get; }
     public RepoStack Stack { get; }
-    public LayerConventionProfiles LayerConventions { get; }
     public IReadOnlyList<GeneratedFile> GeneratedFiles { get; }
     public IReadOnlySet<string> WorkflowProposedPaths { get; }
     public Dictionary<string, HashSet<string>> InterfaceDirectMembers { get; }
     public InterfaceCatalog InterfaceCatalog { get; }
     public TypeNamespaceCatalog TypeNamespaceCatalog { get; }
     public Dictionary<string, string> ProposedTypeDefinitions { get; }
-    public Dictionary<string, string> DeclaredTypePaths { get; } = new(StringComparer.Ordinal);
-
     internal ApplyContext(
         WorkflowState state,
         string repoPath,
@@ -37,7 +34,6 @@ public sealed class ApplyContext
         RepoRoot = repoRoot;
         Contract = contract;
         Stack = stack;
-        LayerConventions = contract.LayerConventions;
         GeneratedFiles = generatedFiles;
         WorkflowProposedPaths = workflowProposedPaths;
         InterfaceDirectMembers = interfaceDirectMembers;

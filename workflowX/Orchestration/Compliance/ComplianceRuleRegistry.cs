@@ -4,8 +4,7 @@ static class ComplianceRuleRegistry
 {
     private static IReadOnlyList<IComplianceRule> Shared { get; } =
     [
-        new ArchitectureCoverageComplianceRule(),
-        new ProtectedContractComplianceRule()
+        new ArchitectureCoverageComplianceRule()
     ];
 
     public static IReadOnlyList<IComplianceRule> For(ComplianceContext context) =>

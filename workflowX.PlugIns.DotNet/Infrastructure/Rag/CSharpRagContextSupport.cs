@@ -1,4 +1,5 @@
 using System.Text;
+using workflowX.Infrastructure.Compliance.DotNet;
 
 namespace workflowX.Infrastructure.Rag.DotNet;
 
@@ -9,97 +10,15 @@ internal static class CSharpRagContextSupport
 {
     internal static void AppendDotNetImplementationRules(StringBuilder sb)
     {
-        sb.AppendLine("- .NET backend: new role interfaces need full implementations; entity/index property names must match.");
-        sb.AppendLine("- Do not rewrite bootstrap/composition-root files or pre-existing store/base contracts.");
+        sb.AppendLine("- Mirror RAG exemplars; complete implementations; do not rewrite bootstrap/store contracts.");
     }
 
-    internal static void AppendImplementationContext(
-        StringBuilder sb,
-        string repoPath,
-        string taskPrompt,
-        RepoContract contract,
-        IReadOnlyList<string> rankedPaths)
+    internal static void AppendImplementationContext(StringBuilder sb, string repoPath)
     {
-        AppendBackendExemplarCategories(sb, rankedPaths, repoPath);
+        AppendSolutionProjects(sb, repoPath);
 
-        CodeExemplarContext.AppendDiscoveredExemplars(sb, repoPath, taskPrompt);
-
-        string? wiringContext = DependencyWiringAuditor.BuildRegistrationContext(repoPath, contract.RegistrationScope);
-        if (!string.IsNullOrWhiteSpace(wiringContext))
-        {
-            sb.AppendLine();
-            sb.AppendLine(wiringContext);
-        }
-
-        string? bootstrapContext = TestBootstrapContext.BuildContext(repoPath, contract.RegistrationScope);
-        if (!string.IsNullOrWhiteSpace(bootstrapContext))
-        {
-            sb.AppendLine();
-            sb.AppendLine(bootstrapContext);
-        }
-
-        string? interfaceImplRules = InterfaceImplementationGuard.BuildRagContext(repoPath, taskPrompt);
-        if (!string.IsNullOrWhiteSpace(interfaceImplRules))
-        {
-            sb.AppendLine();
-            sb.AppendLine(interfaceImplRules);
-        }
-
-        string? typeMemberRules = TypeMemberConsistencyGuard.BuildRagContext(repoPath, taskPrompt);
-        if (!string.IsNullOrWhiteSpace(typeMemberRules))
-        {
-            sb.AppendLine();
-            sb.AppendLine(typeMemberRules);
-        }
-
-        string? contractRules = InterfaceCallSignatureGuard.BuildRagContext(
-            repoPath,
-            Array.Empty<GeneratedFile>());
-        if (!string.IsNullOrWhiteSpace(contractRules))
-        {
-            sb.AppendLine();
-            sb.AppendLine(contractRules);
-        }
-
-        string? mutationRules = ControllerMutationValidationGuard.BuildRagContext(repoPath);
-        if (!string.IsNullOrWhiteSpace(mutationRules))
-        {
-            sb.AppendLine();
-            sb.AppendLine(mutationRules);
-        }
-    }
-
-    internal static int ScoreBackendPath(string normalizedPath)
-    {
-        int score = 0;
-        if (normalizedPath.Contains("Controller", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("Repository", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("Entities", StringComparison.OrdinalIgnoreCase)) score += 8;
-        if (normalizedPath.Contains("Index", StringComparison.OrdinalIgnoreCase)) score += 6;
-        if (normalizedPath.Contains("UnitTest", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.Contains("Tests", StringComparison.OrdinalIgnoreCase))
-        {
-            score += 10;
-        }
-
-        return score;
-    }
-
-    private static void AppendBackendExemplarCategories(StringBuilder sb, IReadOnlyList<string> rankedPaths, string repoPath)
-    {
-        AppendCategory(sb, "WebAPI controllers", rankedPaths,
-            path => path.Contains("Controller", StringComparison.OrdinalIgnoreCase)
-                    && path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase),
-            repoPath);
-        AppendCategory(sb, "Repository/entities/indexes", rankedPaths, path =>
-            path.Contains("Repository", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Entities", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Index", StringComparison.OrdinalIgnoreCase),
-            repoPath);
-        AppendCategory(sb, "Unit tests", rankedPaths, path =>
-            path.Contains("UnitTest", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase),
-            repoPath);
+        sb.AppendLine();
+        sb.AppendLine(TestBootstrapContext.BuildContext());
     }
 
     internal static IEnumerable<string> SemanticQueries()
@@ -108,51 +27,23 @@ internal static class CSharpRagContextSupport
         yield return "dependency injection composition root registration bootstrap";
     }
 
-    internal static string? DetectCanonicalDirectoryForFileSuffix(
-        string repoPath,
-        string fileSuffix,
-        string? preferredDirectoryName = null) =>
-        DotNetRepoContractDiscoverer.DetectCanonicalDirectoryForFileSuffix(repoPath, fileSuffix, preferredDirectoryName);
-
-    private static void AppendCategory(StringBuilder sb, string title, IEnumerable<string> paths, Func<string, bool> predicate, string repoPath)
+    private static void AppendSolutionProjects(StringBuilder sb, string repoPath)
     {
-        var selected = paths.Where(predicate).Take(3).ToList();
-        if (selected.Count == 0)
+        IReadOnlyList<string> projects = SolutionProjectCatalog.GetSolutionProjectRelativePaths(repoPath);
+        if (projects.Count == 0)
         {
             return;
         }
 
         sb.AppendLine();
-        sb.AppendLine($"{title}:");
-        foreach (var path in selected)
+        sb.AppendLine("Solution projects (use these exact directory names in paths — do not invent .Api/.Application variants):");
+        foreach (string project in projects)
         {
-            string relative = Path.GetRelativePath(repoPath, path).Replace('\\', '/');
-            sb.AppendLine($"- {relative}");
-            sb.AppendLine(ExtractSnippet(path));
-        }
-    }
-
-    private static string ExtractSnippet(string path)
-    {
-        try
-        {
-            int maxLines = 50;
-            int maxChars = 1200;
-            var lines = File.ReadLines(path).Take(maxLines).ToArray();
-            var snippet = string.Join('\n', lines);
-            if (snippet.Length > maxChars)
+            string? directory = Path.GetDirectoryName(project)?.Replace('\\', '/');
+            if (!string.IsNullOrWhiteSpace(directory))
             {
-                snippet = snippet[..maxChars];
+                sb.AppendLine($"- {directory}");
             }
-
-            return $"  Snippet:\n{Indent(snippet, "    ")}";
-        }
-        catch
-        {
-            return "  Snippet: <unavailable>";
         }
     }
-
-    private static string Indent(string text, string prefix) =>
-        string.Join('\n', text.Split('\n').Select(line => $"{prefix}{line}"));
 }

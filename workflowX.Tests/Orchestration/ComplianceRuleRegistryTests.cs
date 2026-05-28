@@ -9,9 +9,10 @@ public class ComplianceRuleRegistryTests
     {
         IReadOnlyList<IComplianceRule> rules = ComplianceRuleRegistry.For(RepoStack.None);
 
-        Assert.Equal(2, rules.Count);
+        Assert.Single(rules);
+        Assert.Contains(rules, rule => rule.RuleId == "architecture.deliverable-coverage");
         Assert.DoesNotContain(rules, rule => rule.RuleId == "architecture.frontend-path-conventions");
-        Assert.DoesNotContain(rules, rule => rule.RuleId == "architecture.layer-contracts");
+        Assert.DoesNotContain(rules, rule => rule.RuleId == "testing.missing-tests");
     }
 
     [Fact]
@@ -20,6 +21,7 @@ public class ComplianceRuleRegistryTests
         IReadOnlyList<IComplianceRule> rules = ComplianceRuleRegistry.For(new RepoStack(true, true));
 
         Assert.Contains(rules, rule => rule.RuleId == "architecture.frontend-path-conventions");
-        Assert.Contains(rules, rule => rule.RuleId == "architecture.layer-contracts");
+        Assert.Contains(rules, rule => rule.RuleId == "architecture.deliverable-coverage");
+        Assert.DoesNotContain(rules, rule => rule.RuleId == "testing.missing-tests");
     }
 }

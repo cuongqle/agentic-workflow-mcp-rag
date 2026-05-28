@@ -13,22 +13,8 @@ public class DotNetStackModuleRegistryTests
         {
             IEnumerable<IComplianceRule> dotnetRules = StackModuleRegistry.ComplianceRules(new RepoStack(true, false));
 
-            Assert.Contains(dotnetRules, rule => rule.RuleId == "architecture.layer-contracts");
+            Assert.DoesNotContain(dotnetRules, rule => rule.RuleId == "testing.missing-tests");
             Assert.DoesNotContain(dotnetRules, rule => rule.RuleId == "architecture.frontend-path-conventions");
-        }
-        finally
-        {
-            RestoreDefaultModules();
-        }
-    }
-
-    [Fact]
-    public void TestReleasePolicies_registered_for_dotnet()
-    {
-        ResetModules();
-        try
-        {
-            Assert.Single(StackModuleRegistry.TestReleasePolicies(new RepoStack(true, false)));
         }
         finally
         {

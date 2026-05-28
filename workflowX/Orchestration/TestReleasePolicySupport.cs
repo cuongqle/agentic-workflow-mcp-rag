@@ -55,14 +55,13 @@ static class TestReleasePolicySupport
             return;
         }
 
-        var agentAdvisoryFindings = state.Audit.Findings
-            .Where(finding => finding.Severity is FindingSeverity.Low or FindingSeverity.Medium)
+        var agentFindings = state.Audit.Findings
             .GroupBy(finding => finding.Message, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
 
         state.Audit.Findings.Clear();
-        state.Audit.Findings.AddRange(agentAdvisoryFindings);
+        state.Audit.Findings.AddRange(agentFindings);
         state.Audit.Findings.AddRange(WorkflowFindingRules.CollectComplianceFindings(state, pendingApplyRejections));
         if (state.BuildValidation is not null)
         {

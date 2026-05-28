@@ -10,20 +10,7 @@ public class RepoStackTests
         var contract = new RepoContract
         {
             RepoPath = "/repo",
-            LayerConventions = new LayerConventionProfiles(
-            [
-                new LayerConventionProfile(
-                    "repository",
-                    "Repository.cs",
-                    1,
-                    "src/Repositories",
-                    true,
-                    true,
-                    false,
-                    [],
-                    [],
-                    LayerInterfacePairingConvention.None)
-            ]),
+            CompositionRootPaths = ["src/Bootstrappers/Program.cs"],
             Frontend = new FrontendModuleTemplate(
                 "web/modules",
                 "web",

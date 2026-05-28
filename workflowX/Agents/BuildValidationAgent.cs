@@ -15,7 +15,7 @@ sealed class BuildValidationAgent : IWorkflowAgent
             return Task.FromResult(new AgentResult
             {
                 AgentName = Name,
-                Summary = "Build validation skipped: no supported stack detected.",
+                Summary = "Read-only detector: build validation skipped (no supported stack detected).",
                 ProductionBuildPassed = null,
                 Findings =
                 {
@@ -43,7 +43,7 @@ sealed class BuildValidationAgent : IWorkflowAgent
             return new AgentResult
             {
                 AgentName = "BuildValidationAgent",
-                Summary = single.Summary,
+                Summary = PrefixReadOnlyDetectorSummary(single.Summary),
                 ProductionBuildPassed = single.ProductionBuildPassed,
                 TestsPassed = single.TestsPassed,
                 Findings = single.Findings
@@ -70,11 +70,23 @@ sealed class BuildValidationAgent : IWorkflowAgent
         return new AgentResult
         {
             AgentName = "BuildValidationAgent",
-            Summary = string.Join(" ", summaries),
+            Summary = PrefixReadOnlyDetectorSummary(string.Join(" ", summaries)),
             ProductionBuildPassed = productionPassed,
             TestsPassed = testsPassed,
             Findings = findings
         };
+    }
+
+    private static string PrefixReadOnlyDetectorSummary(string? summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return "Read-only detector: build validation completed.";
+        }
+
+        return summary.StartsWith("Read-only detector:", StringComparison.Ordinal)
+            ? summary
+            : $"Read-only detector: {summary}";
     }
 
     private static bool? MergePassFlag(bool? current, bool? next)

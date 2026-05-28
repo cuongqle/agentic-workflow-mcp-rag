@@ -10,7 +10,7 @@ public class FrontendComplianceRuleRegistryTests
     {
         IReadOnlyList<IComplianceRule> rules = ComplianceRuleRegistry.For(new RepoStack(false, true));
 
-        Assert.True(rules.Count > 2);
+        Assert.Equal(2, rules.Count);
         Assert.Contains(rules, rule => rule.RuleId == "architecture.frontend-path-conventions");
         Assert.DoesNotContain(rules, rule => rule.RuleId == "architecture.layer-contracts");
     }

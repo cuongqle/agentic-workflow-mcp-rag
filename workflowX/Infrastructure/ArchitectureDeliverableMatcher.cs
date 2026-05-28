@@ -7,10 +7,7 @@ internal static class ArchitectureDeliverableMatcher
 {
     internal static IReadOnlyList<string> BuildBackendAllowedPaths(WorkflowState state)
     {
-        var paths = new List<string>();
-        paths.AddRange(WorkflowFindingRules.GetBackendPaths(state));
-        paths.AddRange(MissingLayerTestSynthesizer.GetRequiredTestPaths(state));
-        return paths;
+        return WorkflowFindingRules.GetBackendPaths(state);
     }
 
     internal static IReadOnlyList<string> BuildFrontendAllowedPaths(WorkflowState state) =>
@@ -105,34 +102,58 @@ internal static class ArchitectureDeliverableMatcher
             return false;
         }
 
-        string[] proposedSegments = proposedDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        string[] requiredSegments = requiredDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (proposedSegments.Any(segment => requiredSegments.Contains(segment, StringComparer.OrdinalIgnoreCase)))
+        if (proposedDir.Equals(requiredDir, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        int maxOverlap = Math.Min(proposedSegments.Length, requiredSegments.Length);
-        for (int overlap = maxOverlap; overlap >= 1; overlap--)
+        if (proposedDir.EndsWith("/" + requiredDir, StringComparison.OrdinalIgnoreCase)
+            || requiredDir.EndsWith("/" + proposedDir, StringComparison.OrdinalIgnoreCase))
         {
-            bool match = true;
-            for (int i = 0; i < overlap; i++)
-            {
-                if (!proposedSegments[proposedSegments.Length - overlap + i]
-                        .Equals(requiredSegments[requiredSegments.Length - overlap + i], StringComparison.OrdinalIgnoreCase))
-                {
-                    match = false;
-                    break;
-                }
-            }
+            return true;
+        }
 
-            if (match)
+        string[] proposedSegments = proposedDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] requiredSegments = requiredDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] shorter = proposedSegments.Length <= requiredSegments.Length ? proposedSegments : requiredSegments;
+        string[] longer = proposedSegments.Length > requiredSegments.Length ? proposedSegments : requiredSegments;
+        if (shorter.Length == 0 || longer.Length < shorter.Length)
+        {
+            return false;
+        }
+
+        bool suffixMatch = true;
+        for (int i = 0; i < shorter.Length; i++)
+        {
+            if (!longer[longer.Length - shorter.Length + i]
+                    .Equals(shorter[i], StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                suffixMatch = false;
+                break;
             }
         }
 
-        return false;
+        if (suffixMatch)
+        {
+            return true;
+        }
+
+        return SharesSolutionProjectSegment(proposedDir, requiredDir);
+    }
+
+    private static bool SharesSolutionProjectSegment(string proposedDir, string requiredDir)
+    {
+        var proposedProjects = ExtractSolutionProjectSegments(proposedDir);
+        var requiredProjects = ExtractSolutionProjectSegments(requiredDir);
+        return proposedProjects.Any(segment => requiredProjects.Contains(segment, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static HashSet<string> ExtractSolutionProjectSegments(string directory)
+    {
+        return directory
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Where(segment => segment.Contains('.', StringComparison.Ordinal))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     internal static bool PathUnderDirectory(string normalizedPath, string directory)

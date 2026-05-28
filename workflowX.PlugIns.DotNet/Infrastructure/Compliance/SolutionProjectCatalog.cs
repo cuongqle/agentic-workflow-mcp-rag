@@ -53,13 +53,6 @@ internal static class SolutionProjectCatalog
             .ToList();
     }
 
-    public static bool IsSolutionProject(string repoPath, string projectRelativePath)
-    {
-        string normalized = projectRelativePath.Replace('\\', '/').TrimStart('/');
-        return GetSolutionProjectRelativePaths(repoPath)
-            .Any(path => path.Equals(normalized, StringComparison.OrdinalIgnoreCase));
-    }
-
     private static bool IsUnderArtifactPath(string path)
     {
         string normalized = path.Replace('\\', '/');

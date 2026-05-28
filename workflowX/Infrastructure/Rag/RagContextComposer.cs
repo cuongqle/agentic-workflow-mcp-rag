@@ -44,29 +44,17 @@ static class RagContextComposer
         AppendImplementationRules(sb, contract);
         sb.AppendLine();
 
-        var signals = ExtractTaskSignals(taskPrompt);
-        var candidateFiles = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath, contract).ToList();
+        var candidateFiles = RepoCodeFileScanner.EnumerateRelevantFiles(repoPath, contract)
+            .OrderBy(path => Path.GetRelativePath(repoPath, path).Replace('\\', '/'), StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         AppendCorpusSummary(sb, candidateFiles, repoPath);
         AppendSemanticContext(sb, ragIndex, taskPrompt, contract);
 
-        var ranked = candidateFiles
-            .Select(path => new
-            {
-                Path = path,
-                Score = ScoreFile(Path.GetRelativePath(repoPath, path).Replace('\\', '/'), signals, contract)
-            })
-            .OrderByDescending(x => x.Score)
-            .ThenBy(x => x.Path.Length)
-            .Take(14)
-            .Select(x => x.Path)
-            .ToList();
-
         RepoStack stack = contract.Stack;
-        stack.WhenDotNet(() =>
-            CSharpRagContextSupport.AppendImplementationContext(sb, repoPath, taskPrompt, contract, ranked));
+        stack.WhenDotNet(() => CSharpRagContextSupport.AppendImplementationContext(sb, repoPath));
         stack.WhenFrontend(() =>
-            FrontendRagContextSupport.AppendImplementationContext(sb, ranked, contract, repoPath));
+            FrontendRagContextSupport.AppendImplementationContext(sb, candidateFiles, contract, repoPath));
 
         return sb.ToString();
     }
@@ -75,7 +63,7 @@ static class RagContextComposer
     {
         sb.AppendLine();
         sb.AppendLine("Implementation rules (apply + compliance enforce these):");
-        sb.AppendLine("- Mirror exemplar files in the sections below for the same layer (naming, inheritance, APIs).");
+        sb.AppendLine("- Mirror exemplars from semantic RAG hits and on-disk patterns (naming, inheritance, APIs).");
         sb.AppendLine("- Ship complete code: real method bodies; no stubs, TODO, or NotImplementedException.");
         contract.Stack.WhenDotNet(() => CSharpRagContextSupport.AppendDotNetImplementationRules(sb));
     }
@@ -176,25 +164,6 @@ static class RagContextComposer
     private static string Indent(string text, string prefix) =>
         string.Join('\n', text.Split('\n').Select(line => $"{prefix}{line}"));
 
-    private static List<string> ExtractTaskSignals(string taskPrompt)
-    {
-        var tokens = taskPrompt
-            .Split(new[] { ' ', '\t', '\r', '\n', ',', '.', ':', ';', '-', '_', '/', '\\', '(', ')', '[', ']', '{', '}', '\'' }, StringSplitOptions.RemoveEmptyEntries)
-            .Where(token => token.Length >= 4)
-            .Select(token => token.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        string? targetEntity = InferTargetEntityName(taskPrompt);
-        if (!string.IsNullOrWhiteSpace(targetEntity)
-            && !tokens.Any(t => t.Equals(targetEntity, StringComparison.OrdinalIgnoreCase)))
-        {
-            tokens.Add(targetEntity);
-        }
-
-        return tokens;
-    }
-
     private static string? InferTargetEntityName(string taskPrompt)
     {
         var quoted = Regex.Matches(taskPrompt, @"'([A-Za-z][A-Za-z0-9_]*)'");
@@ -213,46 +182,6 @@ static class RagContextComposer
         }
 
         return null;
-    }
-
-    private static int ScoreFile(string relativePath, IReadOnlyList<string> signals, RepoContract contract)
-    {
-        string normalizedPath = relativePath.Replace('\\', '/');
-        int score = ScoreFileCore(relativePath, signals);
-
-        RepoStack stack = contract.Stack;
-        if (stack.DotNet)
-        {
-            score += CSharpRagContextSupport.ScoreBackendPath(normalizedPath);
-        }
-
-        if (stack.Frontend && contract.Frontend is not null)
-        {
-            score += FrontendRagContextSupport.ScoreFrontendPath(normalizedPath, contract.Frontend);
-        }
-
-        return score;
-    }
-
-    private static int ScoreFileCore(string path, IReadOnlyList<string> signals)
-    {
-        string fileName = Path.GetFileNameWithoutExtension(path);
-        string normalizedPath = path.Replace('\\', '/');
-        int score = 0;
-
-        foreach (var signal in signals)
-        {
-            if (fileName.Contains(signal, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 20;
-            }
-            if (normalizedPath.Contains(signal, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 8;
-            }
-        }
-
-        return score;
     }
 
     private static string ClampContext(string content, int maxChars)

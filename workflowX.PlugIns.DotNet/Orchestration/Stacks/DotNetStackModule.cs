@@ -1,7 +1,7 @@
 using workflowX.Infrastructure;
 
 /// <summary>
-/// DotNet stack plug-in — compliance rules and test-release policy.
+/// DotNet stack plug-in — compliance rules (prompt-first; no test quarantine policy).
 /// </summary>
 sealed class DotNetStackModule : IStackModule
 {
@@ -11,5 +11,5 @@ sealed class DotNetStackModule : IStackModule
 
     public IReadOnlyList<IComplianceRule> ComplianceRules => DotNetComplianceRules.All;
 
-    public ITestReleasePolicy? TestReleasePolicy { get; } = new DotNetTestReleasePolicy();
+    public ITestReleasePolicy? TestReleasePolicy => null;
 }

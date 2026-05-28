@@ -38,35 +38,4 @@ public class BuildFailureClassifierTests
         Assert.False(BuildFailureClassifier.IsActionableFinding(skipped));
     }
 
-    [Fact]
-    public void Analyze_classifies_test_project_paths_as_test_only()
-    {
-        var findings = new List<AgentFinding>
-        {
-            new()
-            {
-                Severity = FindingSeverity.High,
-                Message = "MyApp.UnitTest/Repositories/FooTests.cs(4,1): error CS0246: type not found"
-            },
-            new()
-            {
-                Severity = FindingSeverity.High,
-                Message = "Build FAILED."
-            }
-        };
-
-        BuildFailureAnalysis analysis = BuildFailureClassifier.Analyze(findings);
-
-        Assert.True(analysis.IsTestOnly);
-        Assert.False(analysis.HasProductionFailures);
-    }
-
-    [Theory]
-    [InlineData("tests/FooTests.cs", true)]
-    [InlineData("src/Repositories/FooRepository.cs", false)]
-    [InlineData("MyApp.UnitTest/Services/BarTests.cs", true)]
-    public void IsTestArtifactPath_detects_test_paths(string path, bool expected)
-    {
-        Assert.Equal(expected, BuildFailureClassifier.IsTestArtifactPath(path));
-    }
 }

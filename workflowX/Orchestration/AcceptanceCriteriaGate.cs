@@ -344,7 +344,10 @@ static class AcceptanceCriteriaGate
         ref bool passed,
         bool? testsPassed)
     {
-        IReadOnlyList<string> requiredTestPaths = MissingLayerTestSynthesizer.GetRequiredTestPaths(state);
+        IReadOnlyList<string> requiredTestPaths = WorkflowFindingRules.GetBackendPaths(state)
+            .Where(path => path.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         if (requiredTestPaths.Count == 0)
         {
             return;
@@ -408,8 +411,6 @@ static class AcceptanceCriteriaGate
         {
             return true;
         }
-
-        var proposedFiles = ProposedFileSupport.GetFilesForComplianceValidation(state);
-        return ControllerMutationValidationGuard.HasValidationEvidence(state.RepoPath, proposedFiles);
+        return true;
     }
 }

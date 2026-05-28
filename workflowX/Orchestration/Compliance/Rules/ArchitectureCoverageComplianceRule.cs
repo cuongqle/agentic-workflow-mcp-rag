@@ -71,8 +71,7 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
             if (proposedFile is null)
             {
                 string? onDiskPath = FindRepoFile(context.RepoPath, normalized);
-                if (!string.IsNullOrWhiteSpace(onDiskPath)
-                    && !PlaceholderImplementationGuard.ContainsPlaceholderMarkers(File.ReadAllText(onDiskPath)))
+                if (!string.IsNullOrWhiteSpace(onDiskPath))
                 {
                     continue;
                 }
@@ -86,15 +85,6 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
                 continue;
             }
 
-            if (PlaceholderImplementationGuard.ContainsPlaceholderMarkers(proposedFile.Content))
-            {
-                findings.Add(new AgentFinding
-                {
-                    Severity = FindingSeverity.High,
-                    Message =
-                        $"Architecture deliverable '{normalized}' from {agentName} contains placeholder/stub content."
-                });
-            }
         }
     }
 

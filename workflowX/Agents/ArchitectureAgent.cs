@@ -96,7 +96,12 @@ sealed class ArchitectureAgent : LlmWorkflowAgentBase
             - Include every file the task requires for each active layer.
             - Paths must be relative to the repository root and include the correct file extension.
             - Do not include source code, stubs, or markdown — JSON only.
-            - Reference exemplar paths from RAG by name only in descriptions.
+            - For every backendFiles.path: copy an existing exemplar path from RAG for the same layer and change only the file name.
+            - Controllers/repositories/entities/interfaces: same project segment and folder as matching exemplars in RAG.
+            - Tests: use the same project segment as existing *Tests.cs exemplars in RAG.
+            - Use only solution project directory names listed in RAG; never invent folders (no .Api/.Application when the solution has .WebAPI).
+            - Never repeat the top-level repository folder as the project folder.
+            - If no exemplar exists for a layer in RAG, omit that backendFiles entry and state low confidence in summary.
 
             {JsonOutputSchema}
             """;
