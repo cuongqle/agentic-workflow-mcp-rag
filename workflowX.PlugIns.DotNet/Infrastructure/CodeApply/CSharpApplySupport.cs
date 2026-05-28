@@ -59,9 +59,54 @@ internal static class CSharpApplySupport
     {
         content = NormalizeRepositoryUsings(relativePath, content, context.Contract.RepositoryInterfacesNamespace);
         content = EnsureReferencedTypeUsings(content, context.TypeNamespaceCatalog);
+        content = NormalizeRepositoryMethodCallAliases(content, context.InterfaceCatalog);
         content = NormalizeLayerConstructorDependencies(context, relativePath, content);
         content = EnsureConstructorDependencyFields(relativePath, content);
         return NormalizeLayerTestContent(relativePath, content, context.RepoPath);
+    }
+
+    /// <summary>
+    /// Recovery output sometimes calls Add(...) on repository interfaces that expose Insert(...).
+    /// Rewrite only when safe: receiver is an interface-typed field, Add is absent, Insert exists.
+    /// </summary>
+    private static string NormalizeRepositoryMethodCallAliases(string content, InterfaceCatalog interfaceCatalog)
+    {
+        var fieldToInterface = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match fieldMatch in Regex.Matches(
+                     content,
+                     @"\b(?:private|protected|public|internal)\s+(?:readonly\s+)?(?<type>I[A-Za-z0-9_]+)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+                     RegexOptions.Multiline))
+        {
+            string iface = fieldMatch.Groups["type"].Value;
+            string field = fieldMatch.Groups["name"].Value;
+            if (!string.IsNullOrWhiteSpace(iface) && !string.IsNullOrWhiteSpace(field))
+            {
+                fieldToInterface[field] = iface;
+            }
+        }
+
+        foreach ((string field, string iface) in fieldToInterface)
+        {
+            if (!interfaceCatalog.TryGetMethods(iface, out HashSet<string> methods) || methods.Count == 0)
+            {
+                continue;
+            }
+
+            bool hasAdd = methods.Contains("Add");
+            bool hasInsert = methods.Contains("Insert");
+            if (hasAdd || !hasInsert)
+            {
+                continue;
+            }
+
+            content = Regex.Replace(
+                content,
+                $@"(\b(?:this\.)?{Regex.Escape(field)}\s*)\.Add\s*\(",
+                "$1.Insert(",
+                RegexOptions.Multiline);
+        }
+
+        return content;
     }
 
     internal static bool TryValidate(
@@ -94,6 +139,12 @@ internal static class CSharpApplySupport
         if (!PlaceholderImplementationGuard.TryValidate(trimmed, out string placeholderReason))
         {
             reason = placeholderReason;
+            return false;
+        }
+
+        if (!ParseConversionGuard.TryValidate(trimmed, out string parseReason))
+        {
+            reason = parseReason;
             return false;
         }
 
@@ -889,49 +940,11 @@ internal static class CSharpApplySupport
     }
 
     /// <summary>
-    /// Layer-aware apply order: interfaces → entities → indexes → misc → repositories → controllers → tests.
-    /// Non-C# paths (e.g. frontend) receive default priority and sort alphabetically among peers.
+    /// Layer-aware apply order driven by discovered <see cref="LayerConventionProfiles"/> and repo contract.
     /// </summary>
-    internal static List<GeneratedFile> OrderForApply(IReadOnlyList<GeneratedFile> files) =>
-        files
-            .OrderBy(f => GetApplyPriority(f.RelativePath))
-            .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-    internal static int GetApplyPriority(string relativePath)
-    {
-        string fileName = Path.GetFileName(relativePath);
-        if (fileName.StartsWith('I') && fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 0;
-        }
-
-        if (relativePath.Contains("/Entities/", StringComparison.OrdinalIgnoreCase)
-            || relativePath.Contains("/Models/", StringComparison.OrdinalIgnoreCase))
-        {
-            return 1;
-        }
-
-        if (fileName.EndsWith("Index.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 2;
-        }
-
-        if (fileName.EndsWith("Repository.cs", StringComparison.OrdinalIgnoreCase) && !fileName.StartsWith('I'))
-        {
-            return 4;
-        }
-
-        if (fileName.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 5;
-        }
-
-        if (fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return 6;
-        }
-
-        return 3;
-    }
+    internal static List<GeneratedFile> OrderForApply(
+        IReadOnlyList<GeneratedFile> files,
+        LayerConventionProfiles layerConventions,
+        RepoContract? contract = null) =>
+        CSharpApplyOrderSupport.OrderForApply(files, layerConventions, contract);
 }

@@ -44,8 +44,12 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
             - If there is no BACKEND_FILES section or checklist is empty, return files: [] and a short summary.
             - Otherwise implement every BACKEND_FILES entry; match responsibilities using RAG exemplars.
             - When the checklist includes *Tests.cs paths, implement unit tests by mirroring sibling *Tests.cs exemplars from RAG.
-            - Complete source only: no stubs, TODO, NotImplementedException, or placeholder comments.
+            - Complete source only: no stubs, TODO, NotImplementedException, placeholder comments, or "// Add methods ... if needed".
+            - Return only paths listed in BACKEND_FILES (plus companion I* interface files for planned implementations). Do not add .csproj or host entrypoint files unless explicitly listed.
             - Keep CLR types consistent across every layer and file you touch: mirror RAG exemplars so the same identifier, route/query parameter, property, and method signature use matching types end-to-end (never pass a value through layers with incompatible types).
+            - Use Parse/TryParse only when converting from string input; never call int.Parse/Guid.Parse/DateTime.Parse on values already typed as int/Guid/DateTime/etc.
+            - Never edit protected pre-existing infrastructure contracts (core store/repository/entity abstractions and shared base infrastructure types); adapt to them.
+            - Call only methods declared on injected interfaces; if an interface exposes Insert/Delete (not Add/Remove), use the declared names exactly.
             - For Create/Update/Post actions, mirror existing controller mutation validation: resolve each entity *Id foreign key through the related injected role repository (using whatever lookup member that repository exposes in this repo) before persisting, and return NotFound or an equivalent error when the related record is missing.
 
             Unified RAG context:

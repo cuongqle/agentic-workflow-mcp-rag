@@ -73,6 +73,11 @@ internal static class InterfaceImplementationGuard
         var satisfiedMethods = CollectSatisfiedMethods(repoPath, content, classMatch.Groups[2].Value);
         foreach (string iface in implementedInterfaces)
         {
+            if (!TryValidateInterfaceMethodSignatures(repoPath, content, classMatch.Groups[2].Value, iface, out reason))
+            {
+                return false;
+            }
+
             if (!TryResolveRequiredMembers(iface, interfaceDirectMembers, out HashSet<string>? required)
                 || required is null
                 || required.Count == 0)
@@ -175,6 +180,119 @@ internal static class InterfaceImplementationGuard
         }
 
         return false;
+    }
+
+    private static bool TryValidateInterfaceMethodSignatures(
+        string repoPath,
+        string classContent,
+        string inheritanceClause,
+        string interfaceName,
+        out string reason)
+    {
+        reason = string.Empty;
+        string? interfaceContent = ResolveTypeContent(repoPath, interfaceName);
+        if (string.IsNullOrWhiteSpace(interfaceContent))
+        {
+            return true;
+        }
+
+        HashSet<string> requiredSignatures = ExtractMethodSignatures(interfaceContent, interfaceMode: true);
+        if (requiredSignatures.Count == 0)
+        {
+            return true;
+        }
+
+        HashSet<string> implementedSignatures = ExtractMethodSignatures(classContent, interfaceMode: false);
+        foreach (string baseType in ParseBaseTypes(inheritanceClause))
+        {
+            if (baseType.StartsWith('I'))
+            {
+                continue;
+            }
+
+            string? baseContent = ResolveTypeContent(repoPath, baseType);
+            if (string.IsNullOrWhiteSpace(baseContent))
+            {
+                continue;
+            }
+
+            implementedSignatures.UnionWith(ExtractMethodSignatures(baseContent, interfaceMode: false));
+            implementedSignatures.UnionWith(ExtractMethodSignatures(baseContent, interfaceMode: true));
+        }
+
+        foreach (string required in requiredSignatures)
+        {
+            if (implementedSignatures.Contains(required))
+            {
+                continue;
+            }
+
+            string requiredName = required.Split('(')[0];
+            if (implementedSignatures.Any(sig => sig.StartsWith(requiredName + "(", StringComparison.Ordinal)))
+            {
+                reason =
+                    $"Method signature mismatch for {interfaceName}.{requiredName}: expected {required}. "
+                    + $"Available overloads: {string.Join(", ", implementedSignatures.Where(sig => sig.StartsWith(requiredName + "(", StringComparison.Ordinal)).OrderBy(s => s, StringComparer.Ordinal))}.";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static HashSet<string> ExtractMethodSignatures(string content, bool interfaceMode)
+    {
+        var signatures = new HashSet<string>(StringComparer.Ordinal);
+        string pattern = interfaceMode
+            ? @"^\s*(?:[\w<>\[\],\s\?\.]+\s+)+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?<params>[^;{)]*)\)\s*;"
+            : @"^\s*(?:public|protected)\s+(?:override\s+|virtual\s+|async\s+)*[\w<>\[\],\s\?\.]+\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?<params>[^{)]*)\)";
+        foreach (Match match in Regex.Matches(content, pattern, RegexOptions.Multiline))
+        {
+            string name = match.Groups["name"].Value;
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            string signature = $"{name}({NormalizeParameterSignature(match.Groups["params"].Value)})";
+            signatures.Add(signature);
+        }
+
+        return signatures;
+    }
+
+    private static string NormalizeParameterSignature(string rawParams)
+    {
+        if (string.IsNullOrWhiteSpace(rawParams))
+        {
+            return string.Empty;
+        }
+
+        var normalized = new List<string>();
+        foreach (string param in rawParams.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string cleaned = Regex.Replace(param.Trim(), @"\s+", " ");
+            if (string.IsNullOrWhiteSpace(cleaned))
+            {
+                continue;
+            }
+
+            string[] parts = cleaned.Split(' ');
+            if (parts.Length == 0)
+            {
+                continue;
+            }
+
+            string typeToken = parts[0];
+            if (typeToken is "ref" or "out" or "in" or "params")
+            {
+                typeToken = parts.Length > 1 ? parts[1] : typeToken;
+            }
+
+            normalized.Add(NormalizeTypeName(typeToken));
+        }
+
+        return string.Join(",", normalized);
     }
 
     private static List<string> ParseImplementedInterfaces(

@@ -8,7 +8,7 @@ namespace workflowX.Infrastructure.CodeApply.DotNet;
 internal static class PlaceholderImplementationGuard
 {
     private static readonly Regex PlaceholderCommentRegex = new(
-        @"//\s*(TODO|FIXME|HACK|Implement\b|Methods?\s+for\b)",
+        @"//\s*(TODO|FIXME|HACK|Implement\b|Methods?\s+for\b|Add\s+methods?\b)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     internal static bool ContainsPlaceholderMarkers(string content)
@@ -28,7 +28,8 @@ internal static class PlaceholderImplementationGuard
             return true;
         }
 
-        if (content.Contains("can be added here", StringComparison.OrdinalIgnoreCase))
+        if (content.Contains("can be added here", StringComparison.OrdinalIgnoreCase)
+            || content.Contains("if needed", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }

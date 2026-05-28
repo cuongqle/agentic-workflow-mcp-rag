@@ -16,15 +16,15 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
 
         ValidateArchitectureDeliverables(
             context,
-            WorkflowFindingRules.GetBackendPaths(context.State),
-            context.ProposedFiles,
+            ArchitectureDeliverableMatcher.BuildBackendAllowedPaths(context.State),
+            context.State.Backend?.ProposedFiles,
             "BackendDeveloperAgent",
             findings);
 
         ValidateArchitectureDeliverables(
             context,
-            WorkflowFindingRules.GetFrontendPaths(context.State),
-            context.ProposedFiles,
+            ArchitectureDeliverableMatcher.BuildFrontendAllowedPaths(context.State),
+            context.State.Frontend?.ProposedFiles,
             "FrontendDeveloperAgent",
             findings);
 
@@ -33,22 +33,40 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
 
     private static void ValidateArchitectureDeliverables(
         ComplianceContext context,
-        IReadOnlyList<string> requiredPaths,
-        IReadOnlyList<GeneratedFile>? proposedFiles,
+        IReadOnlyList<string> allowedPaths,
+        IReadOnlyList<GeneratedFile>? agentProposedFiles,
         string agentName,
         List<AgentFinding> findings)
     {
-        if (requiredPaths.Count == 0)
+        if (allowedPaths.Count == 0 || agentProposedFiles is null || agentProposedFiles.Count == 0)
         {
             return;
         }
 
-        proposedFiles ??= new List<GeneratedFile>();
-        foreach (string requiredPath in requiredPaths)
+        foreach (GeneratedFile extra in agentProposedFiles)
+        {
+            string normalized = extra.RelativePath.Replace('\\', '/').TrimStart('/');
+            if (ArchitectureDeliverableMatcher.IsAllowedDeliverable(
+                    normalized,
+                    allowedPaths,
+                    context.State.Contract))
+            {
+                continue;
+            }
+
+            findings.Add(new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message =
+                    $"Unexpected deliverable '{normalized}' from {agentName} is not listed in the architecture plan."
+            });
+        }
+
+        foreach (string requiredPath in allowedPaths)
         {
             string normalized = requiredPath.Replace('\\', '/');
-            GeneratedFile? proposedFile = proposedFiles.FirstOrDefault(file =>
-                PathsMatch(file.RelativePath, normalized));
+            GeneratedFile? proposedFile = agentProposedFiles.FirstOrDefault(file =>
+                ArchitectureDeliverableMatcher.PathsMatch(file.RelativePath, normalized));
 
             if (proposedFile is null)
             {
@@ -78,14 +96,6 @@ sealed class ArchitectureCoverageComplianceRule : IComplianceRule
                 });
             }
         }
-    }
-
-    private static bool PathsMatch(string proposedRelativePath, string requiredPath)
-    {
-        string proposed = proposedRelativePath.Replace('\\', '/');
-        return proposed.Equals(requiredPath, StringComparison.OrdinalIgnoreCase)
-               || proposed.EndsWith("/" + requiredPath, StringComparison.OrdinalIgnoreCase)
-               || proposed.EndsWith("/" + Path.GetFileName(requiredPath), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? FindRepoFile(string repoPath, string relativePath)

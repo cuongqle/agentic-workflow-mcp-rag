@@ -28,6 +28,8 @@ sealed class RecoveryAgent : LlmWorkflowAgentBase
             ? "(no exemplar files attached — use allowed files and read patterns from repo)"
             : state.CompilationFixExemplarContext;
 
+        string recoveryRules = BuildRecoveryRules(state);
+
         return $@"You are the recovery agent.
 Goal: fix the build errors below so the repository compiles. Use minimal, safe edits.
 
@@ -50,14 +52,7 @@ Apply rejections (must fix — files were not written to disk; the workflow will
 {complianceIssues}
 
 Rules:
-- Fix every build error and every apply rejection. Read each rejection reason literally (e.g. missing constructor dependency type 'IX') and add that dependency to the constructor.
-- When a rejection cites a layer exemplar or missing dependency, open the exemplar source in Exemplar sources and mirror its constructor signature for the target entity.
-- Match the exemplar sources above (constructors, interfaces, namespaces, file layout).
-- Return complete, valid C# or script files only (balanced braces; no truncation).
-- Edit only allowed files unless impossible.
-- Never edit obj/ or bin/ paths.
-- Do not create new .csproj files unless required.
-- Include required using/import directives.
+{recoveryRules}
 
 IMPORTANT: Return strictly valid JSON with this shape:
 {{
@@ -69,6 +64,35 @@ IMPORTANT: Return strictly valid JSON with this shape:
     }}
   ]
 }}";
+    }
+
+    private static string BuildRecoveryRules(WorkflowState state)
+    {
+        RepoStack stack = RepoStack.From(state);
+        var lines = new List<string>
+        {
+            "Fix every build error and every apply rejection. Read each rejection reason literally.",
+            "Edit only allowed files unless impossible.",
+            "Never edit obj/ or bin/ paths."
+        };
+
+        if (stack.DotNet)
+        {
+            lines.AddRange(CSharpRecoveryPromptSupport.BuildRuleLines());
+        }
+
+        if (stack.Frontend)
+        {
+            lines.AddRange(FrontendRecoveryPromptSupport.BuildRuleLines());
+        }
+
+        if (!stack.DotNet && !stack.Frontend)
+        {
+            lines.Add(
+                "Return complete source files for the paths you edit (balanced delimiters; no truncation).");
+        }
+
+        return string.Join("\n", lines.Select(line => $"- {line}"));
     }
 
     private static string FormatBuildFindings(WorkflowState state)

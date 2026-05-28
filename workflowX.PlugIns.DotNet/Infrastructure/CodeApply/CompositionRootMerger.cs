@@ -21,6 +21,8 @@ internal static class CompositionRootMerger
         IReadOnlySet<string>? workflowProposedPaths = null,
         string repoPath = "")
     {
+        // Preserve all existing registrations on first pass; filtering workflow-new disallowed
+        // lines is handled after merge with originalContent as baseline.
         string sanitizedExisting = SanitizeBootstrapContent(existingContent, repoPath);
         mergedContent = sanitizedExisting;
         reason = null;
@@ -47,7 +49,7 @@ internal static class CompositionRootMerger
             return false;
         }
 
-        mergedContent = SanitizeBootstrapContent(mergedContent, repoPath);
+        mergedContent = SanitizeBootstrapContent(mergedContent, repoPath, workflowProposedPaths, existingContent);
 
         if (!PassesBootstrapSyntaxChecks(mergedContent, out reason))
         {
@@ -87,8 +89,16 @@ internal static class CompositionRootMerger
         }
     }
 
-    internal static string SanitizeBootstrapContent(string content, string repoPath) =>
-        DependencyWiringAuditor.SanitizeBootstrapRegistrations(RemoveOrphanRegistrationLines(content), repoPath);
+    internal static string SanitizeBootstrapContent(
+        string content,
+        string repoPath,
+        IReadOnlySet<string>? workflowProposedPaths = null,
+        string? originalContent = null) =>
+        DependencyWiringAuditor.SanitizeBootstrapRegistrations(
+            RemoveOrphanRegistrationLines(content),
+            repoPath,
+            workflowProposedPaths,
+            originalContent);
 
     internal static bool PassesBootstrapSyntaxChecks(string content, out string? reason)
     {
@@ -122,12 +132,8 @@ internal static class CompositionRootMerger
                 out int returnIndex,
                 out string collectionVariable))
         {
-            if (lines.Any(line => RegistrationLineRegex.IsMatch(line)))
-            {
-                reason = "Bootstrap has DI Add* lines but no discovered ServiceCollection registration block.";
-                return false;
-            }
-
+            // Program/minimal-host composition roots may legitimately use existing Add* lines
+            // without a local ServiceCollection declaration + BuildServiceProvider return block.
             return true;
         }
 
@@ -218,6 +224,14 @@ internal static class CompositionRootMerger
                 out int insertIndex,
                 out string collectionVariable))
         {
+            // Fallback for Program.cs/minimal-host style files where registrations exist
+            // but there is no local ServiceCollection declaration/return block.
+            if (TryInsertNearExistingRegistrations(lines, newLines, out mergedContent))
+            {
+                reason = null;
+                return true;
+            }
+
             reason = "Could not find DI registration block (ServiceCollection declaration ... return ...BuildServiceProvider()).";
             mergedContent = existingContent;
             return false;
@@ -240,6 +254,107 @@ internal static class CompositionRootMerger
             }
 
             if (!normalized.StartsWith(indent, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(indent))
+            {
+                normalized = indent + normalized.TrimStart();
+            }
+
+            lines.Insert(insertIndex++, normalized);
+        }
+
+        mergedContent = string.Join(Environment.NewLine, lines);
+        return true;
+    }
+
+    private static bool TryInsertNearExistingRegistrations(
+        List<string> lines,
+        IReadOnlyList<string> newLines,
+        out string mergedContent)
+    {
+        mergedContent = string.Join(Environment.NewLine, lines);
+        if (newLines.Count == 0)
+        {
+            return true;
+        }
+
+        string? preferredReceiver = null;
+        foreach (string line in newLines)
+        {
+            Match m = RegistrationLineRegex.Match(line);
+            if (m.Success)
+            {
+                preferredReceiver = m.Groups[1].Value;
+                break;
+            }
+        }
+
+        int insertIndex = -1;
+        string indent = string.Empty;
+        string? actualReceiver = preferredReceiver;
+
+        if (!string.IsNullOrWhiteSpace(preferredReceiver))
+        {
+            for (int i = lines.Count - 1; i >= 0; i--)
+            {
+                if (!RegistrationLineRegex.IsMatch(lines[i]))
+                {
+                    continue;
+                }
+
+                Match m = RegistrationLineRegex.Match(lines[i]);
+                if (!m.Success || !m.Groups[1].Value.Equals(preferredReceiver, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                insertIndex = i + 1;
+                indent = lines[i][..(lines[i].Length - lines[i].TrimStart().Length)];
+                break;
+            }
+        }
+
+        if (insertIndex < 0)
+        {
+            for (int i = lines.Count - 1; i >= 0; i--)
+            {
+                if (!RegistrationLineRegex.IsMatch(lines[i]))
+                {
+                    continue;
+                }
+
+                Match m = RegistrationLineRegex.Match(lines[i]);
+                if (!m.Success)
+                {
+                    continue;
+                }
+
+                actualReceiver = m.Groups[1].Value;
+                insertIndex = i + 1;
+                indent = lines[i][..(lines[i].Length - lines[i].TrimStart().Length)];
+                break;
+            }
+        }
+
+        if (insertIndex < 0)
+        {
+            return false;
+        }
+
+        foreach (string registration in newLines)
+        {
+            string normalized = registration.Trim();
+            if (!string.IsNullOrWhiteSpace(actualReceiver))
+            {
+                Match receiver = RegistrationLineRegex.Match(normalized);
+                if (receiver.Success && !receiver.Groups[1].Value.Equals(actualReceiver, StringComparison.Ordinal))
+                {
+                    normalized = normalized.Replace(
+                        $"{receiver.Groups[1].Value}.",
+                        $"{actualReceiver}.",
+                        StringComparison.Ordinal);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(indent) && !normalized.StartsWith(indent, StringComparison.Ordinal))
             {
                 normalized = indent + normalized.TrimStart();
             }

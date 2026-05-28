@@ -61,7 +61,10 @@ static class GeneratedFileApplier
         List<GeneratedFile> files = EnumerateGeneratedFiles(state).ToList();
         RepoStack stack = state.Contract?.Stack ?? RepoStack.None;
         return stack.DotNet
-            ? CSharpApplySupport.OrderForApply(files)
+            ? CSharpApplySupport.OrderForApply(
+                files,
+                state.Contract?.LayerConventions ?? LayerConventionProfiles.Empty,
+                state.Contract)
             : files.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -90,6 +93,12 @@ static class GeneratedFileApplier
         if (!ApplyContentGuard.TryValidateCommonShape(content, existedBefore, out string commonReason))
         {
             reason = commonReason;
+            return false;
+        }
+
+        if (!ArchitectureDeliverableScopeGuard.TryValidatePath(ctx.State, relativePath, ctx.Stack, out string scopeReason))
+        {
+            reason = scopeReason;
             return false;
         }
 
@@ -284,7 +293,56 @@ static class GeneratedFileApplier
             return true;
         }
 
+        // Fall back to the closest directory match for duplicate file names
+        // (e.g. Program.cs in multiple projects). This avoids ambiguous rejections
+        // when the proposed relative path already carries useful folder context.
+        var scoredMatches = existingMatches
+            .Select(path => new
+            {
+                Path = path,
+                Score = ComputePathOverlapScore(resolvedPath, path)
+            })
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (scoredMatches.Count > 0
+            && scoredMatches[0].Score > 0
+            && (scoredMatches.Count == 1 || scoredMatches[0].Score > scoredMatches[1].Score))
+        {
+            resolvedRelativePath = scoredMatches[0].Path;
+            return true;
+        }
+
         issue = $"Ambiguous duplicate target for '{fileName}'. Existing candidates: {string.Join(", ", existingMatches)}";
         return false;
+    }
+
+    private static int ComputePathOverlapScore(string proposedRelativePath, string existingRelativePath)
+    {
+        string proposedDir = (Path.GetDirectoryName(proposedRelativePath) ?? string.Empty).Replace('\\', '/');
+        string existingDir = (Path.GetDirectoryName(existingRelativePath) ?? string.Empty).Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(proposedDir) || string.IsNullOrWhiteSpace(existingDir))
+        {
+            return 0;
+        }
+
+        string[] proposedSegments = proposedDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] existingSegments = existingDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        int i = proposedSegments.Length - 1;
+        int j = existingSegments.Length - 1;
+        int score = 0;
+        while (i >= 0 && j >= 0)
+        {
+            if (!proposedSegments[i].Equals(existingSegments[j], StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            score++;
+            i--;
+            j--;
+        }
+
+        return score;
     }
 }

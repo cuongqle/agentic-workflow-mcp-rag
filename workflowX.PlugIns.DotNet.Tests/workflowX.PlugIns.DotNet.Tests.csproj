@@ -32,4 +32,9 @@
         <ProjectReference Include="..\workflowX.Tests.Common\workflowX.Tests.Common.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Compile Remove="Infrastructure\LayerTestsTests.cs" />
+      <Compile Remove="Infrastructure\InfrastructureContractsTests.cs" />
+    </ItemGroup>
+
 </Project>

@@ -78,6 +78,87 @@ public class CSharpApplySupportConstructorTests
     }
 
     [Fact]
+    public async Task ApplyAsync_rewrites_repository_add_call_to_insert_when_interface_declares_insert_only()
+    {
+        using var repo = new TempRepo();
+        repo.WriteFile(
+            "SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
+            """
+            namespace SinglePageSample.Repository.Interfaces;
+
+            public interface ITimesheetRepository
+            {
+                void Insert(Timesheet value);
+            }
+            """);
+        repo.WriteFile(
+            "SinglePageSample.Repository/Timesheet.cs",
+            """
+            namespace SinglePageSample.Repository;
+
+            public class Timesheet { }
+            """);
+        repo.WriteFile(
+            "SinglePageSample.WebAPI/TestBootstrapper.cs",
+            """
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace SinglePageSample.WebAPI;
+
+            public static class TestBootstrapper
+            {
+                public static IServiceProvider Create()
+                {
+                    var services = new ServiceCollection();
+                    return services.BuildServiceProvider();
+                }
+            }
+            """);
+
+        WorkflowState state = WorkflowStateBuilder.Create(repo.Path, stack: new RepoStack(true, false));
+        state.Contract = RepoContractDiscoverer.Discover(repo.Path);
+        state.Stage = WorkflowStage.Implementing;
+        state.Backend = new AgentResult
+        {
+            ProposedFiles =
+            [
+                new GeneratedFile
+                {
+                    RelativePath = "SinglePageSample.WebAPI/Controllers/TimesheetController.cs",
+                    Content = """
+                        namespace SinglePageSample.WebAPI.Controllers;
+
+                        using SinglePageSample.Repository.Interfaces;
+
+                        public class TimesheetController
+                        {
+                            private readonly ITimesheetRepository _repository;
+
+                            public TimesheetController(ITimesheetRepository repository)
+                            {
+                                _repository = repository;
+                            }
+
+                            public void Save(Timesheet value)
+                            {
+                                _repository.Add(value);
+                            }
+                        }
+                        """
+                }
+            ]
+        };
+
+        ApplyResult result = await GeneratedFileApplier.ApplyAsync(state);
+
+        Assert.Empty(result.RejectedFiles);
+        string written = File.ReadAllText(
+            Path.Combine(repo.Path, "SinglePageSample.WebAPI/Controllers/TimesheetController.cs"));
+        Assert.Contains("_repository.Insert(value);", written, StringComparison.Ordinal);
+        Assert.DoesNotContain("_repository.Add(value);", written, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ApplyAsync_injects_missing_constructor_field_for_this_member_access()
     {
         using var repo = new TempRepo();

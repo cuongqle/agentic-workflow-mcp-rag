@@ -29,4 +29,9 @@
         <Using Include="workflowX.Infrastructure.BuildValidation.DotNet" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Compile Remove="Infrastructure\CodeApply\InfrastructureContracts.cs" />
+      <Compile Remove="Infrastructure\CodeApply\DotNetApplySession.cs" />
+    </ItemGroup>
+
 </Project>

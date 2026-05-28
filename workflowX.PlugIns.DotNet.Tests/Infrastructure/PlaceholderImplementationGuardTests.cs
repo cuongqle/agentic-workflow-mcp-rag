@@ -27,4 +27,18 @@ public class PlaceholderImplementationGuardTests
         Assert.True(PlaceholderImplementationGuard.TryValidate(content, out string reason));
         Assert.Empty(reason);
     }
+
+    [Fact]
+    public void Timesheet_repository_placeholder_comment_is_rejected()
+    {
+        const string content = """
+            public class TimesheetRepository
+            {
+                // Add methods to manage Timesheet if needed
+            }
+            """;
+
+        Assert.True(PlaceholderImplementationGuard.ContainsPlaceholderMarkers(content));
+        Assert.False(PlaceholderImplementationGuard.TryValidate(content, out _));
+    }
 }
