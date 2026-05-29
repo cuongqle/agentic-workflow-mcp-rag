@@ -24,6 +24,7 @@
         <Using Include="workflowX.Orchestration.Compliance" />
         <Using Include="workflowX.Orchestration.Stacks" />
         <Using Include="workflowX.Infrastructure.Compliance.DotNet" />
+        <Using Include="workflowX.Infrastructure.Exemplar.DotNet" />
     </ItemGroup>
 
     <ItemGroup>

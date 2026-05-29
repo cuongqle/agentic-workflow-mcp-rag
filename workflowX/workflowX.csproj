@@ -38,6 +38,7 @@
       <Using Include="workflowX.Infrastructure.BuildValidation.Frontend" />
       <Using Include="workflowX.Infrastructure.CodeApply.Frontend" />
       <Using Include="workflowX.Infrastructure.Rag.Frontend" />
+      <Using Include="workflowX.Infrastructure.Exemplar.DotNet" />
     </ItemGroup>
 
     <ItemGroup>

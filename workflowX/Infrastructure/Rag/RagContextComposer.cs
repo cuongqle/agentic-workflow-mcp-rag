@@ -52,7 +52,7 @@ static class RagContextComposer
         AppendSemanticContext(sb, ragIndex, taskPrompt, contract);
 
         RepoStack stack = contract.Stack;
-        stack.WhenDotNet(() => CSharpRagContextSupport.AppendImplementationContext(sb, repoPath));
+        stack.WhenDotNet(() => CSharpRagContextSupport.AppendImplementationContext(sb, repoPath, contract));
         stack.WhenFrontend(() =>
             FrontendRagContextSupport.AppendImplementationContext(sb, candidateFiles, contract, repoPath));
 

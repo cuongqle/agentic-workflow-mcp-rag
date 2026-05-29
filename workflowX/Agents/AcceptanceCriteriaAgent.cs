@@ -119,7 +119,7 @@ sealed class AcceptanceCriteriaAgent : LlmWorkflowAgentBase
             - Do not fail test-related criteria solely because the audit mentions missing tests when build validation reports Tests passed: True.
             - Mark passed=false when evidence is missing, ambiguous, or contradicted by build/audit summaries.
             - Use deterministic build/test outcomes as authoritative evidence over audit narrative.
-            - When a criterion mentions validation, treat backend controller mutation validation (resolve *Id foreign keys through role repositories before Create/Update, using the same lookup pattern as existing controllers) as required evidence; mark passed=false if proposed controllers lack this pattern while repository exemplars use it.
+            - When a criterion mentions validation, treat mutation validation as required evidence: resolve *Id foreign keys through injected dependencies before Create/Update using the same lookup pattern as same-kind exemplars in RAG; mark passed=false if proposed code lacks that pattern while exemplars use it.
             - Return JSON only.
 
             {JsonOutputSchema}

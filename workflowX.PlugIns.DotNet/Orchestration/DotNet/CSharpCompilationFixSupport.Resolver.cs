@@ -66,7 +66,7 @@ static partial class CSharpCompilationFixSupport
         ExpandEntityPathsFromBuildMessages(state, files);
         ExpandErrorDirectorySiblings(state.RepoPath, files);
         ExpandWithContractDependencies(state.RepoPath, files, declarationIndex);
-        TestProjectPathSupport.ExpandWithOwningTestProjects(state.RepoPath, files);
+        TestProjectPathSupport.ExpandWithOwningProjects(state.RepoPath, files);
         BuildFailureClassifier.ExpandDuplicateAssemblyAttributeSources(
             state.RepoPath,
             state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>(),

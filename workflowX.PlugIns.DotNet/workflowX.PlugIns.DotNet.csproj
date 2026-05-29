@@ -27,6 +27,7 @@
         <Using Include="workflowX.Infrastructure.CodeApply.DotNet" />
         <Using Include="workflowX.Infrastructure.Rag.DotNet" />
         <Using Include="workflowX.Infrastructure.BuildValidation.DotNet" />
+      <Using Include="workflowX.Infrastructure.Exemplar.DotNet" />
     </ItemGroup>
 
     <ItemGroup>

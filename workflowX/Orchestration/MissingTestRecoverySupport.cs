@@ -1,13 +1,26 @@
+using System.Text.RegularExpressions;
 using workflowX.Infrastructure;
+using workflowX.Infrastructure.Compliance.DotNet;
+using workflowX.Infrastructure.Exemplar.DotNet;
 
 /// <summary>
 /// Prompt-first test recovery: surfaces planned/missing test paths for <see cref="RecoveryAgent"/>.
 /// </summary>
 internal static class MissingTestRecoverySupport
 {
-    public static bool ShouldFocusOnMissingTests(WorkflowState state)
+    private static readonly Regex BareTestFileNameRegex = new(
+        @"\b([A-Za-z][A-Za-z0-9_]*Tests\.cs)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    public static bool ShouldFocusOnMissingTests(WorkflowState state) =>
+        ShouldAllowTestRecoveryOverwrites(state);
+
+    /// <summary>
+    /// Recovery apply may create/overwrite test files (Recovering or Integrating compilation-fix loop).
+    /// </summary>
+    public static bool ShouldAllowTestRecoveryOverwrites(WorkflowState state)
     {
-        if (state.Stage is not WorkflowStage.Recovering)
+        if (state.Stage is not (WorkflowStage.Recovering or WorkflowStage.Integrating))
         {
             return false;
         }
@@ -22,8 +35,172 @@ internal static class MissingTestRecoverySupport
             return true;
         }
 
-        return GetMissingPlannedTestPaths(state).Count > 0
-               || GetAppliedProductionMissingTests(state).Count > 0;
+        if (GetMissingPlannedTestPaths(state).Count > 0
+            || GetAppliedProductionMissingTests(state).Count > 0)
+        {
+            return true;
+        }
+
+        return WorkflowFindingRules.HasUnresolvedApplyRejections(state)
+               && HasTestRelatedApplyRejection(state);
+    }
+
+    public static bool HasTestRelatedApplyRejection(WorkflowState state) =>
+        state.ComplianceIssues.Any(issue =>
+            issue.Contains("Tests.cs", StringComparison.OrdinalIgnoreCase)
+            || issue.Contains(".spec.", StringComparison.OrdinalIgnoreCase)
+            || issue.Contains("UnitTest", StringComparison.OrdinalIgnoreCase)
+            || issue.Contains(".Tests/", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// All test paths recovery may create or overwrite (plan, exemplar discovery, audit, prior apply rejections).
+    /// </summary>
+    public static IReadOnlyList<string> CollectRecoveryTestOverwritePaths(WorkflowState state, string repoPath)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in GetPlannedTestPaths(state))
+        {
+            paths.Add(path);
+        }
+
+        foreach (string path in GetMissingPlannedTestPaths(state))
+        {
+            paths.Add(path);
+        }
+
+        if (!string.IsNullOrWhiteSpace(repoPath) && Directory.Exists(repoPath))
+        {
+            IReadOnlyList<string> productionPlanned = WorkflowFindingRules.GetBackendPaths(state)
+                .Where(path => !IsTestArtifactPath(path))
+                .ToList();
+            foreach (string discovered in ExemplarTestCompanionSupport.DiscoverMissingTestPaths(repoPath, productionPlanned))
+            {
+                paths.Add(NormalizePath(discovered));
+            }
+
+            foreach (string productionPath in GetAppliedProductionMissingTests(state))
+            {
+                string? expectedTestPath = ExemplarTestCompanionSupport.DiscoverExpectedTestPath(repoPath, productionPath);
+                if (!string.IsNullOrWhiteSpace(expectedTestPath))
+                {
+                    paths.Add(NormalizePath(expectedTestPath));
+                }
+            }
+
+            foreach (string appliedPath in state.AppliedFiles)
+            {
+                if (!IsProductionSourcePath(appliedPath))
+                {
+                    continue;
+                }
+
+                string? expectedTestPath = ExemplarTestCompanionSupport.DiscoverExpectedTestPath(repoPath, appliedPath);
+                if (!string.IsNullOrWhiteSpace(expectedTestPath))
+                {
+                    paths.Add(NormalizePath(expectedTestPath));
+                }
+            }
+        }
+
+        CollectAuditTestPaths(state, repoPath, paths);
+        CollectComplianceTestPaths(state, repoPath, paths);
+        return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static void CollectAuditTestPaths(WorkflowState state, string repoPath, HashSet<string> paths)
+    {
+        if (state.Audit?.Findings is null)
+        {
+            return;
+        }
+
+        foreach (AgentFinding finding in state.Audit.Findings
+                     .Where(finding => finding.Severity is FindingSeverity.High or FindingSeverity.Blocker))
+        {
+            foreach (string path in BuildFailureClassifier.CollectSourcePathsFromMessage(finding.Message, repoPath))
+            {
+                if (IsTestArtifactPath(path) && HasRepoRelativeDirectory(path))
+                {
+                    paths.Add(NormalizePath(path));
+                }
+            }
+
+            foreach (Match match in BareTestFileNameRegex.Matches(finding.Message))
+            {
+                string? resolved = TryResolveBareTestFileName(repoPath, match.Groups[1].Value);
+                if (!string.IsNullOrWhiteSpace(resolved))
+                {
+                    paths.Add(resolved);
+                }
+            }
+        }
+    }
+
+    private static void CollectComplianceTestPaths(WorkflowState state, string repoPath, HashSet<string> paths)
+    {
+        foreach (string issue in state.ComplianceIssues)
+        {
+            foreach (string path in BuildFailureClassifier.CollectSourcePathsFromMessage(issue, repoPath))
+            {
+                if (IsTestArtifactPath(path) && HasRepoRelativeDirectory(path))
+                {
+                    paths.Add(NormalizePath(path));
+                }
+            }
+
+            foreach (Match match in BareTestFileNameRegex.Matches(issue))
+            {
+                string? resolved = TryResolveBareTestFileName(repoPath, match.Groups[1].Value);
+                if (!string.IsNullOrWhiteSpace(resolved))
+                {
+                    paths.Add(resolved);
+                }
+            }
+        }
+    }
+
+    private static string? TryResolveBareTestFileName(string repoPath, string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(repoPath) || !Directory.Exists(repoPath))
+        {
+            return null;
+        }
+
+        foreach (string absolute in Directory.EnumerateFiles(repoPath, fileName, SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(repoPath, absolute).Replace('\\', '/');
+            if (relative.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || relative.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return NormalizePath(relative);
+        }
+
+        if (!fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string productionFileName = fileName[..^"Tests.cs".Length] + ".cs";
+        foreach (string absolute in Directory.EnumerateFiles(repoPath, productionFileName, SearchOption.AllDirectories))
+        {
+            string productionRelative = Path.GetRelativePath(repoPath, absolute).Replace('\\', '/');
+            if (productionRelative.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                || productionRelative.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string? expected = ExemplarTestCompanionSupport.DiscoverExpectedTestPath(repoPath, productionRelative);
+            if (!string.IsNullOrWhiteSpace(expected))
+            {
+                return NormalizePath(expected);
+            }
+        }
+
+        return null;
     }
 
     public static bool HasMissingTestAuditSignal(WorkflowState state)
@@ -94,8 +271,7 @@ internal static class MissingTestRecoverySupport
                 continue;
             }
 
-            string baseName = Path.GetFileNameWithoutExtension(appliedPath);
-            if (HasMatchingTestFileOnDisk(state.RepoPath, baseName))
+            if (HasMatchingTestFileOnDisk(state.RepoPath, appliedPath))
             {
                 continue;
             }
@@ -121,7 +297,7 @@ internal static class MissingTestRecoverySupport
             return """
 
                    Test recovery focus: automated tests failed or audit flagged missing tests.
-                   Add missing *Tests.cs using the same file/class naming pattern as a same-layer *Tests.cs exemplar in RAG. Never I-prefixed test names.
+                   Add missing tests using the same file/class naming pattern as a same-kind test exemplar in RAG. Never I-prefixed test names.
 
                    """;
         }
@@ -158,8 +334,20 @@ internal static class MissingTestRecoverySupport
         return "\n" + string.Join('\n', lines) + "\n";
     }
 
-    private static bool HasMatchingTestFileOnDisk(string repoPath, string productionBaseName)
+    private static bool HasMatchingTestFileOnDisk(string repoPath, string productionRelativePath)
     {
+        string? expectedPath = ExemplarTestCompanionSupport.DiscoverExpectedTestPath(repoPath, productionRelativePath);
+        if (!string.IsNullOrWhiteSpace(expectedPath))
+        {
+            string absolute = Path.Combine(repoPath, expectedPath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(absolute))
+            {
+                return true;
+            }
+        }
+
+        string productionBaseName = Path.GetFileNameWithoutExtension(
+            Path.GetFileName(productionRelativePath.Replace('\\', '/')));
         string expectedName = productionBaseName + "Tests.cs";
         foreach (string absolute in Directory.EnumerateFiles(repoPath, expectedName, SearchOption.AllDirectories))
         {
@@ -196,6 +384,9 @@ internal static class MissingTestRecoverySupport
                || normalized.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
                || normalized.EndsWith(".jsx", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool HasRepoRelativeDirectory(string path) =>
+        NormalizePath(path).Contains('/', StringComparison.Ordinal);
 
     private static string NormalizePath(string path) =>
         path.Replace('\\', '/').Trim().TrimStart('/');

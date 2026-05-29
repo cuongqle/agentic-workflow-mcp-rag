@@ -81,7 +81,31 @@ static partial class CSharpCompilationFixSupport
             return ("(No exemplar files could be loaded from disk.)", attached, omitted);
         }
 
+        AppendUsingHints(state, repoPath, sb);
+
         return (sb.ToString().TrimEnd(), attached, omitted);
+    }
+
+    private static void AppendUsingHints(WorkflowState state, string repoPath, StringBuilder sb)
+    {
+        IReadOnlyList<string> plannedPaths = state.ArchitecturePlan is { BackendPaths.Count: > 0 } plan
+            ? plan.BackendPaths
+            : state.CompilationFixAllowedFiles;
+        if (plannedPaths.Count == 0)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> productionPaths = ProductionPathExemplarSupport.DiscoverProductionRelativePaths(repoPath);
+        string usingHints = ExemplarUsingSupport.BuildImplementationUsingHints(repoPath, plannedPaths, productionPaths);
+        if (string.IsNullOrWhiteSpace(usingHints))
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Required usings and namespaces (from exemplar sources — copy exactly):");
+        sb.AppendLine(usingHints);
     }
 
     private static bool ShouldOmitOptional(int blockLength, int usedChars, int optionalAttached, CompilationFixContextOptions options)

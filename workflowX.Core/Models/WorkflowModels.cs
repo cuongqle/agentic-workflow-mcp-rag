@@ -78,6 +78,7 @@ public sealed class WorkflowState
     public AgentResult? Recovery { get; set; }
     public List<string> CompilationFixAllowedFiles { get; set; } = new();
     public string CompilationFixExemplarContext { get; set; } = string.Empty;
+    public string ImplementationExemplarContext { get; set; } = string.Empty;
     public List<string> ComplianceIssues { get; set; } = new();
     public HashSet<string> DeferredTestEntities { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string? PullRequestUrl { get; set; }

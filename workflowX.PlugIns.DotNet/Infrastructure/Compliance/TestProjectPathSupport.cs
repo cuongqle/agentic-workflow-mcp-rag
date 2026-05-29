@@ -27,7 +27,10 @@ internal static class TestProjectPathSupport
     internal static string? TryResolveOwningTestCsproj(string repoPath, string sourceRelativePath) =>
         TryResolveOwningCsproj(repoPath, sourceRelativePath, testProjectsOnly: true);
 
-    internal static void ExpandWithOwningTestProjects(string repoPath, HashSet<string> paths)
+    internal static void ExpandWithOwningTestProjects(string repoPath, HashSet<string> paths) =>
+        ExpandWithOwningProjects(repoPath, paths, testProjectsOnly: true);
+
+    internal static void ExpandWithOwningProjects(string repoPath, HashSet<string> paths, bool testProjectsOnly = false)
     {
         foreach (string path in paths.ToList())
         {
@@ -36,13 +39,16 @@ internal static class TestProjectPathSupport
                 continue;
             }
 
-            string? csproj = TryResolveOwningTestCsproj(repoPath, path);
+            string? csproj = TryResolveOwningCsproj(repoPath, path, testProjectsOnly);
             if (!string.IsNullOrWhiteSpace(csproj))
             {
                 paths.Add(csproj);
             }
         }
     }
+
+    internal static string? TryResolveOwningProjectCsproj(string repoPath, string sourceRelativePath) =>
+        TryResolveOwningCsproj(repoPath, sourceRelativePath, testProjectsOnly: false);
 
     private static string? TryResolveOwningCsproj(
         string repoPath,

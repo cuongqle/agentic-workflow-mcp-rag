@@ -204,7 +204,7 @@ internal static class BuildFailureClassifier
 
         foreach (Match match in Regex.Matches(
                      message,
-                     @"([A-Za-z0-9_\-./\\]+\.(?:cs|csproj))(?:\(\d+,\d+\))?",
+                     @"([A-Za-z0-9_\-./\\]+\.(?:cs|csproj|js|ts|tsx))(?:\(\d+,\d+\))?",
                      RegexOptions.IgnoreCase))
         {
             string? relative = NormalizeToRepoRelativePath(match.Groups[1].Value, repoPath);

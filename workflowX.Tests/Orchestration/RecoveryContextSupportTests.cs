@@ -93,4 +93,44 @@ public class RecoveryContextSupportTests
 
         Assert.Empty(state.CompilationFixAllowedFiles);
     }
+
+    [Fact]
+    public void CollectCompilerReferencedPaths_includes_discovered_test_targets_when_audit_only()
+    {
+        using TempRepo repo = new();
+        repo.WriteFile(
+            "SinglePageSample.UnitTest/SinglePageSample.UnitTest.csproj",
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+              </ItemGroup>
+            </Project>
+            """);
+        repo.WriteFile(
+            "SinglePageSample.UnitTest/RepositoryTest/EmployeeRepositoryTests.cs",
+            "class EmployeeRepositoryTests { }");
+        repo.WriteFile("SinglePageSample.Repository/EmployeeRepository.cs", "class EmployeeRepository { }");
+
+        var state = WorkflowStateBuilder.Create(repo.Path, stack: new RepoStack(DotNet: true, Frontend: false));
+        state.Stage = WorkflowStage.Recovering;
+        state.AppliedFiles.Add("SinglePageSample.Repository/TimesheetRepository.cs");
+        state.Audit = new AgentResult
+        {
+            Findings =
+            [
+                new AgentFinding
+                {
+                    Severity = FindingSeverity.High,
+                    Message = "Missing TimesheetRepositoryTests.cs"
+                }
+            ]
+        };
+        state.BuildValidation = new AgentResult { Findings = [] };
+
+        List<string> paths = RecoveryContextSupport.CollectCompilerReferencedPaths(state);
+        Assert.Contains(
+            paths,
+            path => path.EndsWith("TimesheetRepositoryTests.cs", StringComparison.OrdinalIgnoreCase));
+    }
 }

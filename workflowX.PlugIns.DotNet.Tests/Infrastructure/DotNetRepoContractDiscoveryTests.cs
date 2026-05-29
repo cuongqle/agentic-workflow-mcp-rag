@@ -24,4 +24,36 @@ public class DotNetRepoContractDiscoveryTests
         Assert.Empty(contract.CompositionRootPaths);
         Assert.False(contract.Stack.Frontend);
     }
+
+    [Fact]
+    public void Discover_entity_convention_from_on_disk_exemplars()
+    {
+        using var repo = new TempRepo();
+        repo.WriteFile("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+        repo.WriteFile(
+            "src/App/Entities/Company.cs",
+            """
+            using App.Domain;
+
+            public class Company : IEntity
+            {
+            }
+            """);
+        repo.WriteFile(
+            "src/App/Entities/Project.cs",
+            """
+            using App.Domain;
+
+            public class Project : IEntity
+            {
+            }
+            """);
+
+        RepoContract contract = RepoContractDiscoverer.Discover(repo.Path);
+
+        Assert.NotNull(contract.Entity);
+        Assert.Equal("src/App/Entities", contract.Entity!.CanonicalDirectory);
+        Assert.Equal("IEntity", contract.Entity.RequiredInterface);
+        Assert.Contains("using App.Domain", contract.Entity.RequiredUsingLine, StringComparison.Ordinal);
+    }
 }

@@ -54,9 +54,4 @@ internal static class CSharpApplySupport
         return extension is ".cs" or ".csproj";
     }
 
-    internal static List<GeneratedFile> OrderForApply(
-        IReadOnlyList<GeneratedFile> files,
-        LayerConventionProfiles layerConventions,
-        RepoContract? contract = null) =>
-        CSharpApplyOrderSupport.OrderForApply(files, layerConventions, contract);
 }

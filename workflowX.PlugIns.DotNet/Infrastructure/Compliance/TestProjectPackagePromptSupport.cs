@@ -31,6 +31,12 @@ internal static class TestProjectPackagePromptSupport
             "ProjectReference Include paths are relative to the test .csproj file location; mirror exemplar test projects exactly.";
         yield return
             "Before returning, verify every non-BCL using in *Tests.cs maps to a PackageReference or ProjectReference on the test .csproj you return.";
+        yield return
+            "Copy <TargetFramework> (or <TargetFrameworks>) verbatim from the on-disk exemplar test .csproj in RAG — never invent, downgrade, or omit it (wrong TFM causes NU1201 when ProjectReference targets a higher framework).";
+        yield return
+            "When returning a test .csproj, the test project's TargetFramework must match every referenced production project's TargetFramework shown in RAG.";
+        yield return
+            "If build output reports NU1201 project compatibility, re-read the exemplar test .csproj in RAG and restore its exact TargetFramework and ProjectReference Include paths — do not guess net5.0 or other legacy TFMs.";
     }
 
     internal static void AppendRagExemplars(StringBuilder sb, string repoPath)
@@ -53,6 +59,11 @@ internal static class TestProjectPackagePromptSupport
         foreach (TestProjectExemplar exemplar in exemplars)
         {
             sb.AppendLine($"- {exemplar.RelativePath}");
+            if (!string.IsNullOrWhiteSpace(exemplar.TargetFramework))
+            {
+                sb.AppendLine($"  - TargetFramework (copy exactly): {exemplar.TargetFramework}");
+            }
+
             foreach (string projectRef in exemplar.ProjectReferences.Take(12))
             {
                 sb.AppendLine($"  - ProjectReference Include=\"{projectRef}\"");
@@ -95,8 +106,9 @@ internal static class TestProjectPackagePromptSupport
 
             List<(string Id, string Version)> packages = ReadPackageReferences(absolute);
             List<string> projectRefs = ReadProjectReferenceIncludes(absolute);
+            string? targetFramework = ReadTargetFramework(absolute);
             string relative = Path.GetRelativePath(repoRoot, absolute).Replace('\\', '/');
-            exemplars.Add(new TestProjectExemplar(relative, packages, projectRefs));
+            exemplars.Add(new TestProjectExemplar(relative, targetFramework, packages, projectRefs));
             if (exemplars.Count >= 6)
             {
                 break;
@@ -200,6 +212,41 @@ internal static class TestProjectPackagePromptSupport
         return references;
     }
 
+    private static string? ReadTargetFramework(string csprojAbsolute)
+    {
+        if (!TryLoadProject(csprojAbsolute, out XDocument? document))
+        {
+            return null;
+        }
+
+        foreach (XElement property in document!.Descendants())
+        {
+            if (property.Name.LocalName.Equals("TargetFramework", StringComparison.OrdinalIgnoreCase))
+            {
+                string value = property.Value.Trim();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        foreach (XElement property in document.Descendants())
+        {
+            if (!property.Name.LocalName.Equals("TargetFrameworks", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string? first = property.Value
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(segment => !string.IsNullOrWhiteSpace(segment));
+            return string.IsNullOrWhiteSpace(first) ? null : first;
+        }
+
+        return null;
+    }
+
     private static bool TryLoadProject(string csprojAbsolute, out XDocument? document)
     {
         document = null;
@@ -216,6 +263,7 @@ internal static class TestProjectPackagePromptSupport
 
     private sealed record TestProjectExemplar(
         string RelativePath,
+        string? TargetFramework,
         List<(string Id, string Version)> Packages,
         List<string> ProjectReferences);
 }

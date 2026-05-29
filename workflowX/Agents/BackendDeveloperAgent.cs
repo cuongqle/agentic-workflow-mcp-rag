@@ -26,14 +26,19 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
             ? "(no BACKEND_FILES paths parsed — return files: [] ; do not invent paths)"
             : string.Join("\n", requiredPaths.Distinct(StringComparer.OrdinalIgnoreCase).Select(path => $"- {path}"));
 
+        string exemplarSources = string.IsNullOrWhiteSpace(state.ImplementationExemplarContext)
+            ? "(no same-kind exemplar files attached — use Unified RAG path lists and semantic hits)"
+            : state.ImplementationExemplarContext;
+
         return $"""
             You are the backend developer agent.
-            Implement backend deliverables from the architecture plan only. Use RAG exemplars for code structure.
+            Implement backend deliverables from the architecture plan only. Mirror same-kind exemplar sources below.
 
             Task: {state.Task.Title}
-            Task detail: {state.Task.Description}
+            Task detail (for scope only — do not implement types or stores named here unless they appear in Exemplar sources):
+            {state.Task.Description}
 
-            Architecture plan:
+            Architecture plan (paths/checklist only — ignore narrative descriptions that name types not in Exemplar sources):
             {architecturePlan}
 
             BACKEND_FILES checklist (ONLY these paths may appear in files[] — apply rejects anything else):
@@ -41,20 +46,20 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
 
             Rules:
             - If the checklist is empty, return files: [] and a short summary.
-            - Implement every BACKEND_FILES entry with full source; match responsibilities using RAG exemplars.
+            - Implement every BACKEND_FILES entry with full source; for each path, copy implementation structure from a same-kind exemplar in Exemplar sources (constructor, injected dependencies, calls, usings, async style).
             {FormatBackendScopeRules()}
-            - When the checklist includes *Tests.cs, implement tests by mirroring same-layer exemplars from RAG.
-            - When the checklist includes a test .csproj, return that .csproj (full file) with PackageReference/ProjectReference copied from RAG.
+            - When the checklist includes *Tests.cs files, implement every one in the same JSON batch as production files; mirror the attached test exemplar (path, class name = file name, usings, fixtures).
+            - When the checklist includes a test .csproj, return it with PackageReference/ProjectReference and TargetFramework copied verbatim from the test exemplar in RAG (never invent or downgrade TargetFramework).
+            - When the checklist includes a test project file, return that file (full content) with package, project references, and TargetFramework copied from RAG.
             - Complete source only: no stubs, TODO, NotImplementedException, placeholder comments, or "// Add methods ... if needed".
             - Copy paths exactly as listed on the checklist — same project folder segments as RAG exemplars; never add an extra leading repository folder segment.
             - Never return AssemblyInfo.cs, *.AssemblyInfo.cs, or files under obj/ or bin/.
-            - For every type used from a referenced project, add `using` for the exact namespace from Exemplar sources (or copy usings from sibling *Tests.cs exemplars).
-            - Keep data types consistent across every layer and file you touch: mirror RAG exemplars end-to-end.
-            - At API boundaries ([FromQuery]/[FromRoute]/request DTO strings), convert to dependency parameter types before calling (TryParse + validation response when needed).
+            - Copy the full using block from Exemplar sources for each checklist path (including 'Required usings and namespaces'); add `using` for every cross-deliverable type in a different namespace — ProjectReference does not import namespaces.
+            - Keep data types consistent across every deliverable you touch: mirror RAG exemplars end-to-end.
+            - At HTTP boundary string inputs, convert to dependency parameter types before calling (TryParse + validation response when needed).
             - Use Parse/TryParse only when converting from string input.
             - Never edit protected pre-existing infrastructure contracts; adapt to them.
-            - Call only methods declared on injected interfaces; implement every interface member with matching signatures.
-            - For Create/Update/Post actions, resolve each entity *Id foreign key through the injected dependency before persist/update.
+            - For Create/Update/Post actions, resolve each *Id foreign key through the injected dependency the same way same-kind exemplars do before persist/update.
             - For DI wiring, edit only existing composition-root registration blocks; append interface-to-implementation pairs only.
             - In tests, use correctly typed temporal values matching on-disk model definitions.
             {FormatCSharpRules()}
@@ -64,6 +69,11 @@ sealed class BackendDeveloperAgent : LlmWorkflowAgentBase
             - files[] contains ONLY paths from BACKEND_FILES (plus allowed companion I* interfaces for listed implementations).
             - No path in files[] is missing from the checklist and no checklist path is missing from files[] (unless intentionally skipped with reason in summary).
             - Every path matches the checklist string exactly (no duplicated repo/solution folder prefix).
+            - Each .cs file includes every `using` listed for that path under Required usings and namespaces in Exemplar sources.
+            - No comments or summaries that reference storage products or APIs not present in the same-kind exemplar file you copied.
+
+            Exemplar sources (full on-disk same-kind files — sole source of types, usings, and calls):
+            {exemplarSources}
 
             Unified RAG context:
             {state.CombinedRagContext}

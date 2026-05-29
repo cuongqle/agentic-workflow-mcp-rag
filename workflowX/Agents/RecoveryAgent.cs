@@ -54,7 +54,7 @@ Blocking audit findings (must fix — workflow retries until resolved or attempt
             ? string.Empty
             : $"""
 
-Unified RAG context (copy *Tests.cs / spec paths from exemplars here — same folders, new entity name only):
+Unified RAG context (copy test/spec paths from exemplars here — same folders, new feature name only):
 {Truncate(state.CombinedRagContext, MaxRagContextChars)}
 
 """;
@@ -92,10 +92,14 @@ Exemplar sources (FULL files from this repo — match patterns here; primary ref
 Build errors (fix every line — compiler output):
 {buildErrors}
 
-Allowed files to edit (includes compiler-referenced paths and owning test .csproj when a *Tests.cs file is listed — use these paths exactly, no extra repo-folder prefix):
+Allowed files to edit (copy paths character-for-character — includes compiler-referenced paths and owning .csproj when a .cs file in that project is listed):
 {allowedFiles}
 
-Apply rejections (must fix — files were not written to disk; when a .csproj was rejected, return it at the exact path from Allowed files or RAG Test project references, not a duplicated folder path):
+Path shape (apply rejects duplicated repo folder — do not use the WRONG form):
+- WRONG: RepoName/RepoName.ProjectFolder/SomeFile.ext
+- RIGHT: RepoName.ProjectFolder/SomeFile.ext
+
+Apply rejections (must fix — files were not written to disk; re-return each file only at the canonical path from Allowed files or build output):
 {complianceIssues}
 
 Rules:
@@ -122,29 +126,30 @@ IMPORTANT: Return strictly valid JSON with this shape:
             lines.AddRange(
             [
                 "This pass is test-focused: implement every path in Test recovery checklist before other edits.",
-                "Copy *Tests.cs paths only from Unified RAG test exemplars (same test project directory and subfolders as exemplar; never production project folders).",
+                "Copy test file paths only from Unified RAG test exemplars (same test project directory and subfolders as exemplar; never production project folders).",
                 "Never create a new test .csproj or test solution folder; update only test projects listed in RAG \"Test project references\".",
                 "Return full content for each new test file; mirror sibling test structure (fixtures, mocks, assertions, using directives).",
                 "Do NOT return production files from Files already applied unless Build errors name that exact path.",
                 "After tests exist on disk, fix any test compile errors named in Build errors (then production only if explicitly referenced).",
-                "When build output says a NuGet type or namespace could not be found, return the exemplar test .csproj from RAG with that PackageReference — the failing *Tests.cs may be in the wrong project folder.",
-                "When build output says a type from a referenced project could not be found, add `using` for the exact namespace from that type's definition in Exemplar sources; copy usings from sibling *Tests.cs when available.",
-                "When build output reports duplicate assembly attributes, remove duplicate [assembly:] / Assembly* attributes from hand-written .cs — never return or edit *.AssemblyInfo.cs or obj/ generated files.",
-                "Never return production files under dotted namespace folders or under the wrong solution-project directory — copy paths from RAG exemplars.",
-                "Always return the owning test .csproj (full file) in files[] together with every *Tests.cs you add or fix.",
-                "Use the test .csproj path exactly as listed in Allowed files or RAG Test project references — never add an extra leading repository folder segment to that path."
+                "When build output says a package type or namespace could not be found, return the exemplar test project file from RAG with that package reference — the failing test source may be in the wrong project folder.",
+                "When build output says a type from a referenced project could not be found, add `using` for the exact namespace from that type's definition in Exemplar sources; copy usings from sibling test exemplars when available.",
+                "When build output reports duplicate assembly attributes, remove duplicate assembly metadata from hand-written source while the SDK also generates it — never return or edit generated artifact folders.",
+                "Never return production files under dotted namespace folders or under the wrong solution-project directory — copy paths from same-kind RAG exemplars.",
+                "Always return the owning test project file (full content) in files[] together with every test source file you add or fix.",
+                "Use the test project file path exactly as listed in Allowed files or RAG Test project references — never add an extra leading repository folder segment to that path.",
+                "When returning a test .csproj, copy TargetFramework exactly from RAG Test project references — never downgrade (e.g. to net5.0); NU1201 means TFM mismatch with a referenced production project."
             ]);
         }
         else if (blockingAudit)
         {
             lines.AddRange(
             [
-                "When audit findings mention missing tests, add *Tests.cs (backend) or .spec./.test. files (frontend) before other fixes.",
-                "Infer test paths only from Unified RAG exemplars and the architecture plan: copy an existing test file path for the same layer, change only the feature/file name (never invent solution project folders not listed in RAG).",
+                "When audit findings mention missing tests, add test source files (backend) or spec/test files (frontend) before other fixes.",
+                "Infer test paths only from Unified RAG exemplars and the architecture plan: copy an existing test file path for the same deliverable kind, change only the feature/file name (never invent solution project folders not listed in RAG).",
                 "You may return new test files not listed under Allowed files and not yet on disk.",
                 "Do NOT return production files already listed under Files already applied unless Build errors name that exact path — apply will reject other overwrites.",
-                "Return ONLY: (1) new test/spec files for audit, (2) production files explicitly named in Build errors. Omit entity/repository/interface/controller files when build passed.",
-                "Use repo-relative paths from RAG solution projects only — never duplicate the solution folder (wrong: RepoName/RepoName.Repository/...; right: RepoName.Repository/...).",
+                "Return ONLY: (1) new test/spec files for audit, (2) production files explicitly named in Build errors. Omit other production files when build passed.",
+                "Use repo-relative paths from RAG solution projects only — never duplicate the solution folder (wrong: RepoName/RepoName.ProjectFolder/...; right: RepoName.ProjectFolder/...).",
                 "After missing tests are addressed, fix remaining build errors and apply rejections."
             ]);
         }
@@ -160,7 +165,7 @@ IMPORTANT: Return strictly valid JSON with this shape:
             "Do not rewrite unrelated code; produce minimal patches only.",
             "Never repeat a previously failed fix attempt.",
             "Use full repo-relative paths; when duplicate filenames exist, never return a bare filename.",
-            "When returning a new controller/repository/test file, place it in the same solution project folder as existing exemplars for that layer — never create a parallel project directory.",
+            "When returning a new file, place it in the same solution project folder as same-kind exemplars in RAG — never create a parallel project directory.",
             "If a required fix would modify a protected on-disk contract file, stop and report low confidence in summary instead of forcing a rewrite.",
             testFocusedRecovery || blockingAudit
                 ? "For production code, only overwrite files listed in compiler errors; create missing test/spec files from checklist/RAG even when not on disk."

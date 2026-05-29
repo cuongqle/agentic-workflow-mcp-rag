@@ -1,8 +1,125 @@
 using workflowX.Configuration;
 using workflowX.Infrastructure;
+using workflowX.Infrastructure.Compliance.DotNet;
 
 sealed partial class WorkflowOrchestrator
 {
+    private static string BuildCompanionDeliverableDescription(
+        string repoPath,
+        string companionPath,
+        IReadOnlyList<string> plannedPaths)
+    {
+        IReadOnlyList<string> productionPaths = ProductionPathExemplarSupport.DiscoverProductionRelativePaths(repoPath);
+        string usingHints = ExemplarUsingSupport.BuildImplementationUsingHints(
+            repoPath,
+            plannedPaths.Append(companionPath).ToList(),
+            productionPaths);
+        if (string.IsNullOrWhiteSpace(usingHints))
+        {
+            return "Same-kind exemplar references this cross-role type — mirror on-disk companion path; change only the subject segment.";
+        }
+
+        return "Same-kind exemplar cross-role companion. "
+            + usingHints.Replace('\n', ' ').Trim();
+    }
+
+    private static void EnrichArchitecturePlanWithDiscoveredTests(WorkflowState state)
+    {
+        if (state.ArchitecturePlan is null
+            || string.IsNullOrWhiteSpace(state.RepoPath)
+            || state.ArchitecturePlan.BackendFiles.Count == 0
+            || state.Contract?.Stack.DotNet != true)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> plannedPaths = state.ArchitecturePlan.BackendPaths;
+        IReadOnlyList<string> missingTests = ExemplarTestCompanionSupport.DiscoverMissingTestPaths(
+            state.RepoPath,
+            plannedPaths);
+        if (missingTests.Count == 0)
+        {
+            return;
+        }
+
+        var merged = state.ArchitecturePlan.BackendFiles.ToList();
+        var plannedSet = new HashSet<string>(plannedPaths, StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<string> testPaths = ExemplarTestCompanionSupport.DiscoverTestRelativePaths(state.RepoPath);
+        IReadOnlyList<string> productionPaths =
+            ProductionPathExemplarSupport.DiscoverProductionRelativePaths(state.RepoPath);
+
+        foreach (string testPath in missingTests)
+        {
+            string? exemplarTest = ExemplarTestCompanionSupport.DiscoverTestExemplarPath(
+                state.RepoPath,
+                testPath,
+                productionPaths,
+                testPaths);
+            string description = string.IsNullOrWhiteSpace(exemplarTest)
+                ? "Mirror on-disk *Tests.cs exemplar for the same production deliverable kind; test class name must match file name."
+                : $"Mirror test exemplar {exemplarTest} (path and {Path.GetFileName(exemplarTest)} naming); class name matches file name.";
+            merged.Add(new ArchitectureDeliverable(testPath, description));
+            state.AddTimeline($"Architecture plan enriched: added test deliverable '{testPath}' from on-disk exemplar pairing.");
+
+            string? testCsproj = TestProjectPathSupport.TryResolveOwningTestCsproj(state.RepoPath, testPath)
+                ?? (exemplarTest is not null
+                    ? TestProjectPathSupport.TryResolveOwningTestCsproj(state.RepoPath, exemplarTest)
+                    : null);
+            if (!string.IsNullOrWhiteSpace(testCsproj) && plannedSet.Add(testCsproj))
+            {
+                merged.Add(new ArchitectureDeliverable(
+                    testCsproj,
+                    "Owning test project for planned *Tests.cs — copy PackageReference and ProjectReference blocks from exemplar."));
+                state.AddTimeline($"Architecture plan enriched: added test project '{testCsproj}'.");
+            }
+        }
+
+        state.ArchitecturePlan = new ArchitecturePlan
+        {
+            Rationale = state.ArchitecturePlan.Rationale,
+            BackendFiles = merged,
+            FrontendFiles = state.ArchitecturePlan.FrontendFiles,
+            TestStrategy = state.ArchitecturePlan.TestStrategy,
+            RollbackNotes = state.ArchitecturePlan.RollbackNotes,
+        };
+    }
+
+    private static void EnrichArchitecturePlanWithDiscoveredCompanions(WorkflowState state)
+    {
+        if (state.ArchitecturePlan is null
+            || string.IsNullOrWhiteSpace(state.RepoPath)
+            || state.ArchitecturePlan.BackendFiles.Count == 0)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> plannedPaths = state.ArchitecturePlan.BackendPaths;
+        IReadOnlyList<string> missing = ExemplarRoleCompanionSupport.DiscoverMissingCompanionPaths(
+            state.RepoPath,
+            plannedPaths);
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        var merged = state.ArchitecturePlan.BackendFiles.ToList();
+        foreach (string path in missing)
+        {
+            string description = BuildCompanionDeliverableDescription(state.RepoPath, path, plannedPaths);
+            merged.Add(new ArchitectureDeliverable(path, description));
+            state.AddTimeline($"Architecture plan enriched: added companion deliverable '{path}' from exemplar cross-references.");
+        }
+
+        state.ArchitecturePlan = new ArchitecturePlan
+        {
+            Rationale = state.ArchitecturePlan.Rationale,
+            BackendFiles = merged,
+            FrontendFiles = state.ArchitecturePlan.FrontendFiles,
+            TestStrategy = state.ArchitecturePlan.TestStrategy,
+            RollbackNotes = state.ArchitecturePlan.RollbackNotes,
+        };
+    }
+
     private void SaveCheckpoint(WorkflowState state) =>
         WorkflowStateCheckpointStore.Save(state, _resumeOptions.CheckpointPath);
 
@@ -82,6 +199,25 @@ sealed partial class WorkflowOrchestrator
                     + $"frontend={state.ArchitecturePlan.FrontendFiles.Count} file(s).");
             }
 
+            EnrichArchitecturePlanWithDiscoveredCompanions(state);
+            EnrichArchitecturePlanWithDiscoveredTests(state);
+
+            foreach (AgentFinding pathFinding in ProductionPathExemplarSupport.ValidatePlannedPaths(
+                         state.RepoPath,
+                         state.ArchitecturePlan))
+            {
+                state.ComplianceIssues.Add($"[{pathFinding.Severity}] {pathFinding.Message}");
+                state.AddTimeline($"Architecture path check: {pathFinding.Message}");
+            }
+
+            foreach (AgentFinding testFinding in ExemplarTestCompanionSupport.ValidatePlannedProductionTests(
+                         state.RepoPath,
+                         state.ArchitecturePlan))
+            {
+                state.ComplianceIssues.Add($"[{testFinding.Severity}] {testFinding.Message}");
+                state.AddTimeline($"Architecture test check: {testFinding.Message}");
+            }
+
             if (architectureResult.Summary.Contains("```", StringComparison.Ordinal))
             {
                 state.AddTimeline("Architecture plan sanitized (removed sample code blocks before implementation).");
@@ -114,6 +250,15 @@ sealed partial class WorkflowOrchestrator
         ImplementationScopeDetails scopeDetails = WorkflowFindingRules.ResolveImplementationScopeDetails(state);
         (bool runBackend, bool runFrontend) = scopeDetails.Scope;
         state.AddTimeline(WorkflowFindingRules.FormatImplementationScopeDiagnostics(scopeDetails));
+
+        if (runBackend)
+        {
+            state.ImplementationExemplarContext = ImplementationExemplarSupport.BuildContext(state);
+            if (!string.IsNullOrWhiteSpace(state.ImplementationExemplarContext))
+            {
+                state.AddTimeline("Implementation: attached full same-kind exemplar sources for backend deliverables.");
+            }
+        }
 
         Task<AgentResult> backendTask = runBackend
             ? _backendDeveloperAgent.ExecuteAsync(state, cancellationToken)

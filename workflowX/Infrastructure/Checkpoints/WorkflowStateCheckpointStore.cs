@@ -31,6 +31,7 @@ internal sealed class WorkflowStateCheckpointData
     public AgentResultData? Recovery { get; set; }
     public List<string> CompilationFixAllowedFiles { get; set; } = new();
     public string CompilationFixExemplarContext { get; set; } = string.Empty;
+    public string ImplementationExemplarContext { get; set; } = string.Empty;
     public List<string> ComplianceIssues { get; set; } = new();
     public List<string> DeferredTestEntities { get; set; } = new();
     public string? PullRequestUrl { get; set; }
@@ -242,6 +243,7 @@ internal static class WorkflowStateCheckpointStore
             Recovery = ToAgentData(state.Recovery),
             CompilationFixAllowedFiles = state.CompilationFixAllowedFiles.ToList(),
             CompilationFixExemplarContext = state.CompilationFixExemplarContext,
+            ImplementationExemplarContext = state.ImplementationExemplarContext,
             ComplianceIssues = state.ComplianceIssues.ToList(),
             DeferredTestEntities = state.DeferredTestEntities.ToList(),
             PullRequestUrl = state.PullRequestUrl,
@@ -278,6 +280,7 @@ internal static class WorkflowStateCheckpointStore
             Audit = FromAgentData(data.Audit),
             Recovery = FromAgentData(data.Recovery),
             CompilationFixExemplarContext = data.CompilationFixExemplarContext,
+            ImplementationExemplarContext = data.ImplementationExemplarContext,
             PullRequestUrl = data.PullRequestUrl,
             PullRequestStatus = data.PullRequestStatus,
             FeatureBranchName = data.FeatureBranchName

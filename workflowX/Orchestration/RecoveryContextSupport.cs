@@ -95,20 +95,8 @@ static class RecoveryContextSupport
             !WorkflowFindingRules.HasActionableBuildFindings(state)
             || MissingTestRecoverySupport.ShouldFocusOnMissingTests(state));
 
-    internal static List<string> CollectCompilerReferencedPaths(WorkflowState state)
-    {
-        IReadOnlyList<AgentFinding> findings = state.BuildValidation?.Findings is { Count: > 0 } buildFindings
-            ? buildFindings
-            : Array.Empty<AgentFinding>();
-        var paths = BuildFailureClassifier.CollectSourcePathsFromFindings(findings, state.RepoPath);
-        foreach (string issue in state.ComplianceIssues)
-        {
-            foreach (string path in BuildFailureClassifier.CollectSourcePathsFromMessage(issue, state.RepoPath))
-            {
-                paths.Add(path.Replace('\\', '/').TrimStart('/'));
-            }
-        }
-
-        return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
-    }
+    internal static List<string> CollectCompilerReferencedPaths(WorkflowState state) =>
+        RecoveryApplySupport.BuildCompilerReferencedRecoveryPaths(state, state.RepoPath)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 }

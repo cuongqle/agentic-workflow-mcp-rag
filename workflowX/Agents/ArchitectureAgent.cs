@@ -8,7 +8,7 @@ sealed class ArchitectureAgent : LlmWorkflowAgentBase
         {
           "summary": "architecture rationale in plain language",
           "backendFiles": [
-            { "path": "relative/path/from/repo/root.cs", "description": "required types, members, behaviors" }
+            { "path": "relative/path/from/repo/root.cs", "description": "Mirror <same-kind exemplar path from RAG>; change only subject — no invented stores or APIs" }
           ],
           "frontendFiles": [
             { "path": "relative/path/from/repo/root.js", "description": "required module behavior" }
@@ -76,10 +76,11 @@ sealed class ArchitectureAgent : LlmWorkflowAgentBase
         return $"""
             You are the architecture agent.
             Task title: {state.Task.Title}
-            Task detail: {state.Task.Description}
+            Task detail (may mention technologies not used in this repo — do not copy those into summary or descriptions; plan only from RAG exemplars):
+            {state.Task.Description}
             Repository path: {state.RepoPath}
 
-            Requirements and acceptance criteria:
+            Requirements and acceptance criteria (exemplar paths in RAG override requirement wording about storage):
             {requirementsSummary}
 
             Repository layers detected from contract/RAG scan: {repoLayers}
@@ -90,19 +91,18 @@ sealed class ArchitectureAgent : LlmWorkflowAgentBase
 
             Specify WHAT to build. Implementer agents decide HOW using RAG exemplars — you do not write code.
 
-            Before backendFiles: read "Production source exemplars" and "Solution projects" in RAG. Every backendFiles.path must match a same-kind file already listed there — change only the feature name. Controllers: copy an existing *Controller.cs exemplar path exactly (same WebAPI/host project folder). Do not invent persistence, mapping, store, or migration files when no same-kind exemplar exists. Never prefix paths with an extra repository folder segment.
+            Before backendFiles: read "Grouped folder exemplars", "Production source exemplars", and "Solution projects" in RAG. Each planned path must sit in the same folder group as a same-kind on-disk exemplar — change only the file name. Do not invent files when no same-kind exemplar exists. Never prefix paths with an extra copy of the repo or solution root folder.
 
             Rules:
             - Satisfy every acceptance criterion from requirements intake.
             - Use backendFiles only when backend=yes; use frontendFiles only when frontend=yes.
-            - Include every file the task requires for each active layer.
+            - Include every file the task requires for each active stack area (backend/frontend).
             - Paths must be relative to the repository root and include the correct file extension.
             - Do not include source code, stubs, or markdown — JSON only.
             {FormatCSharpRules()}
-            {FormatArchitectureTestPlanningRules()}
             - Plan production paths with the same folder segments as RAG exemplars (one solution-project directory per path); never prefix with an extra copy of the repository or solution root folder.
             - Never plan AssemblyInfo.cs or generated artifact paths under obj/ or bin/.
-            - If no exemplar exists for a required layer in RAG, omit that backendFiles entry and state low confidence in summary.
+            - If no same-kind exemplar exists in RAG for a required deliverable, omit that backendFiles entry and state low confidence in summary.
 
             {JsonOutputSchema}
             """;
@@ -111,6 +111,4 @@ sealed class ArchitectureAgent : LlmWorkflowAgentBase
     private static string FormatCSharpRules() =>
         string.Join("\n", CSharpPromptSupport.BuildArchitectureAgentRuleLines().Select(rule => $"- {rule}"));
 
-    private static string FormatArchitectureTestPlanningRules() =>
-        string.Join("\n", CSharpPromptSupport.BuildArchitectureTestPlanningRuleLines().Select(rule => $"- {rule}"));
 }

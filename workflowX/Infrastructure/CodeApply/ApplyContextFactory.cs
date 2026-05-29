@@ -10,7 +10,7 @@ static class ApplyContextFactory
         string repoRoot = Path.GetFullPath(repoPath);
         RepoContract contract = state.Contract ?? RepoContractDiscoverer.Discover(repoPath);
         RepoStack stack = contract.Stack;
-        IReadOnlyList<GeneratedFile> generatedFiles = GeneratedFileApplier.GetOrderedGeneratedFiles(state);
+        IReadOnlyList<GeneratedFile> generatedFiles = GeneratedFileApplier.GetGeneratedFiles(state);
         var workflowProposedPaths = new HashSet<string>(
             generatedFiles.Select(f => f.RelativePath.Replace('\\', '/')),
             StringComparer.OrdinalIgnoreCase);

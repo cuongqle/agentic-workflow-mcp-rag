@@ -42,17 +42,8 @@ static class GeneratedFileApplier
     public static Task RollbackAsync(string repoPath, IReadOnlyList<AppliedFileChange> changes) =>
         ApplyRollback.RollbackAsync(repoPath, changes);
 
-    internal static IReadOnlyList<GeneratedFile> GetOrderedGeneratedFiles(WorkflowState state)
-    {
-        List<GeneratedFile> files = EnumerateGeneratedFiles(state).ToList();
-        RepoStack stack = state.Contract?.Stack ?? RepoStack.None;
-        return stack.DotNet
-            ? CSharpApplySupport.OrderForApply(
-                files,
-                LayerConventionProfiles.Empty,
-                state.Contract)
-            : files.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
-    }
+    internal static IReadOnlyList<GeneratedFile> GetGeneratedFiles(WorkflowState state) =>
+        EnumerateGeneratedFiles(state).ToList();
 
     private static bool TryValidate(
         ApplyContext ctx,
@@ -72,8 +63,9 @@ static class GeneratedFileApplier
             return false;
         }
 
-        if (!RecoveryOverwriteGuard.TryValidateOverwrite(
+        if (!RecoveryApplySupport.TryValidateDotNetRecoveryOverwrite(
                 ctx.State,
+                ctx.Stack,
                 ctx.RepoPath,
                 relativePath,
                 existedBefore,
@@ -141,6 +133,11 @@ static class GeneratedFileApplier
         }
 
         relativePath = relativePath.TrimStart('/');
+        if (!TryResolveRecoveryRelativePath(ctx, ref relativePath, out issue))
+        {
+            return false;
+        }
+
         if (relativePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
             || relativePath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
         {
@@ -171,6 +168,26 @@ static class GeneratedFileApplier
 
         existedBefore = File.Exists(fullPath);
         existingOnDisk = existedBefore ? File.ReadAllText(fullPath) : null;
+        return true;
+    }
+
+    private static bool TryResolveRecoveryRelativePath(
+        ApplyContext ctx,
+        ref string relativePath,
+        out string? issue)
+    {
+        issue = null;
+        if (ctx.State.Stage is not (WorkflowStage.Recovering or WorkflowStage.Integrating))
+        {
+            return true;
+        }
+
+        string canonicalPath = RecoveryPathSupport.CanonicalizeRecoveryPath(relativePath);
+        if (!canonicalPath.Equals(relativePath, StringComparison.OrdinalIgnoreCase))
+        {
+            relativePath = canonicalPath;
+        }
+
         return true;
     }
 
