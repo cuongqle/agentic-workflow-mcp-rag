@@ -66,6 +66,11 @@ static partial class CSharpCompilationFixSupport
         ExpandEntityPathsFromBuildMessages(state, files);
         ExpandErrorDirectorySiblings(state.RepoPath, files);
         ExpandWithContractDependencies(state.RepoPath, files, declarationIndex);
+        TestProjectPathSupport.ExpandWithOwningTestProjects(state.RepoPath, files);
+        BuildFailureClassifier.ExpandDuplicateAssemblyAttributeSources(
+            state.RepoPath,
+            state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>(),
+            files);
         return files.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).Take(80).ToList();
     }
 
@@ -164,6 +169,15 @@ static partial class CSharpCompilationFixSupport
 
             File.Delete(projectPath);
             yield return $"removed stray csproj: {relative}";
+        }
+
+        foreach (string assemblyInfoPath in Directory.EnumerateFiles(repoPath, "*AssemblyInfo.cs", SearchOption.AllDirectories))
+        {
+            if (CSharpAssemblyMetadataGuard.ShouldRemoveStrayAssemblyInfoFile(assemblyInfoPath))
+            {
+                File.Delete(assemblyInfoPath);
+                yield return $"removed stray assembly info: {Path.GetRelativePath(repoPath, assemblyInfoPath).Replace('\\', '/')}";
+            }
         }
     }
 

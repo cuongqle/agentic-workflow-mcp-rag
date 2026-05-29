@@ -88,6 +88,8 @@ sealed class AuditorAgent : LlmWorkflowAgentBase
 
             Rules:
             - Return findings only in JSON (see schema). Flag missing *Tests.cs for new production code as high when exemplars exist in RAG.
+            - Flag wrong test paths/names as high: I-prefixed test files, class/file names that do not match the repo's existing *Tests.cs exemplar pattern, *Tests.cs under production/host .csproj folders (not under RAG test projects), or newly invented test .csproj folders not listed in RAG \"Test project references\".
+            - Flag high when build output reports a type or namespace could not be found (NuGet package or missing using for a referenced project) — likely wrong test project folder or missing test .csproj update.
             - Flag failing builds/tests as blocker or high.
 
             {JsonOutputSchema}

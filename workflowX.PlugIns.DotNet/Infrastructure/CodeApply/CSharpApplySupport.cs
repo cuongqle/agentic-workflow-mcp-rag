@@ -33,6 +33,12 @@ internal static class CSharpApplySupport
     {
         reason = null;
 
+        if (!CSharpAssemblyMetadataGuard.TryValidateApply(relativePath, content, out string assemblyReason))
+        {
+            reason = assemblyReason;
+            return false;
+        }
+
         if (relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
             && !TryValidate(content, out reason))
         {

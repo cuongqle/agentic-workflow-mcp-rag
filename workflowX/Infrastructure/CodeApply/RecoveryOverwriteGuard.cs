@@ -1,3 +1,5 @@
+using workflowX.Infrastructure.Compliance.DotNet;
+
 namespace workflowX.Infrastructure;
 
 /// <summary>
@@ -25,14 +27,59 @@ internal static class RecoveryOverwriteGuard
 
         string normalizedTarget = NormalizePath(relativePath);
         HashSet<string> errorPaths = CollectCompilerErrorPaths(state, repoPath);
-        if (errorPaths.Contains(normalizedTarget))
+        if (IsAllowedRecoveryOverwrite(repoPath, normalizedTarget, errorPaths))
         {
             return true;
         }
 
         reason =
             $"Recovery rejected overwrite of '{relativePath}': no compiler error was reported for this file. "
-            + "Edit only files referenced in build findings.";
+            + "Edit only files referenced in build findings (use exact repo-relative paths — do not duplicate the repository folder name).";
+        return false;
+    }
+
+    internal static bool IsAllowedRecoveryOverwrite(
+        string repoPath,
+        string normalizedTarget,
+        HashSet<string> errorPaths)
+    {
+        if (errorPaths.Contains(normalizedTarget))
+        {
+            return true;
+        }
+
+        foreach (string errorPath in errorPaths)
+        {
+            if (ArchitectureDeliverableMatcher.PathsMatch(normalizedTarget, errorPath))
+            {
+                return true;
+            }
+        }
+
+        if (!normalizedTarget.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        foreach (string errorPath in errorPaths)
+        {
+            if (!errorPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string? owningTestCsproj = TestProjectPathSupport.TryResolveOwningTestCsproj(repoPath, errorPath);
+            if (string.IsNullOrWhiteSpace(owningTestCsproj))
+            {
+                continue;
+            }
+
+            if (ArchitectureDeliverableMatcher.PathsMatch(normalizedTarget, owningTestCsproj))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -51,6 +98,8 @@ internal static class RecoveryOverwriteGuard
             }
         }
 
+        TestProjectPathSupport.ExpandWithOwningTestProjects(repoPath, paths);
+        BuildFailureClassifier.ExpandDuplicateAssemblyAttributeSources(repoPath, findings, paths);
         return paths;
     }
 

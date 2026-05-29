@@ -66,6 +66,74 @@ public class RecoveryOverwriteGuardTests
     }
 
     [Fact]
+    public void TryValidateOverwrite_allows_test_csproj_when_tests_cs_has_compiler_error()
+    {
+        using TempRepo repo = new();
+        repo.WriteFile(
+            "Acme.Tests/Acme.Tests.csproj",
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+              </ItemGroup>
+            </Project>
+            """);
+        repo.WriteFile("Acme.Tests/TimesheetRepositoryTests.cs", "class TimesheetRepositoryTests { }");
+
+        WorkflowState state = WorkflowStateBuilder.Create(repo.Path);
+        state.Stage = WorkflowStage.Recovering;
+        WorkflowStateBuilder.WithBuildFindings(
+            state,
+            new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message =
+                    "Acme.Tests/TimesheetRepositoryTests.cs(1,7): error CS0246: The type or namespace name 'FluentAssertions' could not be found"
+            });
+
+        Assert.True(RecoveryOverwriteGuard.TryValidateOverwrite(
+            state,
+            repo.Path,
+            "Acme.Tests/Acme.Tests.csproj",
+            existedBefore: true,
+            out _));
+    }
+
+    [Fact]
+    public void TryValidateOverwrite_allows_test_csproj_when_agent_duplicates_repo_folder_prefix()
+    {
+        using TempRepo repo = new();
+        repo.WriteFile(
+            "Acme.Tests/Acme.Tests.csproj",
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+              </ItemGroup>
+            </Project>
+            """);
+        repo.WriteFile("Acme.Tests/TimesheetRepositoryTests.cs", "class TimesheetRepositoryTests { }");
+
+        WorkflowState state = WorkflowStateBuilder.Create(repo.Path);
+        state.Stage = WorkflowStage.Recovering;
+        WorkflowStateBuilder.WithBuildFindings(
+            state,
+            new AgentFinding
+            {
+                Severity = FindingSeverity.High,
+                Message =
+                    "Acme.Tests/TimesheetRepositoryTests.cs(1,7): error CS0246: The type or namespace name 'Example' could not be found"
+            });
+
+        Assert.True(RecoveryOverwriteGuard.TryValidateOverwrite(
+            state,
+            repo.Path,
+            "Acme/Acme.Tests/Acme.Tests.csproj",
+            existedBefore: true,
+            out _));
+    }
+
+    [Fact]
     public void TryValidateOverwrite_ignores_guard_outside_recovery_stages()
     {
         WorkflowState state = WorkflowStateBuilder.Create("/repo");

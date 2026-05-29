@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using workflowX.Infrastructure.CodeApply.DotNet;
 
 namespace workflowX.Infrastructure.Compliance.DotNet;
 
@@ -19,6 +20,32 @@ internal static class BuildFailureClassifier
     public static bool IsActionableFinding(AgentFinding finding) =>
         finding.Severity is FindingSeverity.High or FindingSeverity.Blocker
         && !IsSummaryBanner(finding.Message);
+
+    /// <summary>Build output indicates a missing type, namespace, using, or assembly reference.</summary>
+    internal static bool ReportsUnresolvedTypeOrNamespace(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        if (message.Contains("type or namespace name", StringComparison.OrdinalIgnoreCase)
+            && message.Contains("could not be found", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return message.Contains("are you missing a using directive", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("are you missing an assembly reference", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("does not exist in the namespace", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Build output indicates duplicate assembly metadata attributes.</summary>
+    internal static bool ReportsDuplicateAssemblyAttribute(string message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && message.Contains("Duplicate", StringComparison.OrdinalIgnoreCase)
+        && message.Contains("Assembly", StringComparison.OrdinalIgnoreCase)
+        && message.Contains("attribute", StringComparison.OrdinalIgnoreCase);
 
     internal static IEnumerable<string> ExtractTypeSymbolsFromMessage(string message)
     {
@@ -84,7 +111,88 @@ internal static class BuildFailureClassifier
             }
         }
 
+        TestProjectPathSupport.ExpandWithOwningTestProjects(repoPath, paths);
         return paths;
+    }
+
+    internal static void ExpandDuplicateAssemblyAttributeSources(
+        string repoPath,
+        IEnumerable<AgentFinding> findings,
+        HashSet<string> paths)
+    {
+        foreach (AgentFinding finding in findings)
+        {
+            if (!ReportsDuplicateAssemblyAttribute(finding.Message))
+            {
+                continue;
+            }
+
+            foreach (string errorPath in CollectSourcePathsFromMessage(finding.Message, repoPath))
+            {
+                string? owningCsproj = errorPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                    ? errorPath
+                    : TestProjectPathSupport.TryResolveOwningTestCsproj(repoPath, errorPath)
+                        ?? TryResolveOwningCsproj(repoPath, errorPath);
+                if (string.IsNullOrWhiteSpace(owningCsproj))
+                {
+                    continue;
+                }
+
+                string projectDirectory = Path.GetDirectoryName(Path.Combine(repoPath, owningCsproj.Replace('/', Path.DirectorySeparatorChar))) ?? string.Empty;
+                if (!Directory.Exists(projectDirectory))
+                {
+                    continue;
+                }
+
+                foreach (string absolute in Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories))
+                {
+                    string normalized = absolute.Replace('\\', '/');
+                    if (normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
+                        || normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string relative = Path.GetRelativePath(repoPath, absolute).Replace('\\', '/');
+                    if (CSharpAssemblyMetadataGuard.IsAssemblyInfoPath(relative))
+                    {
+                        paths.Add(relative);
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (CSharpAssemblyMetadataGuard.ContainsDuplicateProneAssemblyMetadata(File.ReadAllText(absolute)))
+                        {
+                            paths.Add(relative);
+                        }
+                    }
+                    catch
+                    {
+                        // Skip unreadable files.
+                    }
+                }
+            }
+        }
+    }
+
+    private static string? TryResolveOwningCsproj(string repoPath, string sourceRelativePath)
+    {
+        string absoluteSource = Path.GetFullPath(Path.Combine(repoPath, sourceRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+        string? directory = Path.GetDirectoryName(absoluteSource);
+        string repoRoot = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        for (int depth = 0; depth < 8 && !string.IsNullOrWhiteSpace(directory) && directory.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase); depth++)
+        {
+            string? csproj = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(csproj))
+            {
+                return Path.GetRelativePath(repoRoot, csproj).Replace('\\', '/');
+            }
+
+            directory = Path.GetDirectoryName(directory);
+        }
+
+        return null;
     }
 
     internal static IEnumerable<string> CollectSourcePathsFromMessage(string message, string repoPath)

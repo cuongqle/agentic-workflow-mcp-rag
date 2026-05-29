@@ -5,7 +5,7 @@ namespace workflowX.Tests.Infrastructure;
 public class ArchitectureDeliverableScopeGuardTests
 {
     [Fact]
-    public void TryValidatePath_rejects_unplanned_project_and_host_files()
+    public void TryValidatePath_rejects_unplanned_and_wrong_prefix_paths()
     {
         string repoPath = Path.Combine(Path.GetTempPath(), $"workflowx-scope-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repoPath);
@@ -21,7 +21,10 @@ public class ArchitectureDeliverableScopeGuardTests
                     new ArchitectureDeliverable("SinglePageSample.Repository/TimesheetRepository.cs", "repo"),
                     new ArchitectureDeliverable(
                         "SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs",
-                        "tests")
+                        "tests"),
+                    new ArchitectureDeliverable(
+                        "SinglePageSample.WebAPI/Controllers/TimesheetController.cs",
+                        "controller")
                 ]
             }
         };
@@ -37,19 +40,31 @@ public class ArchitectureDeliverableScopeGuardTests
 
         Assert.False(ArchitectureDeliverableScopeGuard.TryValidatePath(
             state,
+            "SinglePageSample/SinglePageSample.WebAPI/Controllers/TimesheetController.cs",
+            stack,
+            out _));
+
+        Assert.False(ArchitectureDeliverableScopeGuard.TryValidatePath(
+            state,
             "SinglePageSample.WebAPI/SinglePageSample.WebAPI.csproj",
             stack,
             out _));
 
         Assert.True(ArchitectureDeliverableScopeGuard.TryValidatePath(
             state,
-            "SinglePageSample/SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
+            "SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
             stack,
             out _));
 
         Assert.True(ArchitectureDeliverableScopeGuard.TryValidatePath(
             state,
-            "SinglePageSample/SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs",
+            "SinglePageSample.WebAPI/Controllers/TimesheetController.cs",
+            stack,
+            out _));
+
+        Assert.True(ArchitectureDeliverableScopeGuard.TryValidatePath(
+            state,
+            "SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs",
             stack,
             out _));
     }

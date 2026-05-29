@@ -53,6 +53,11 @@ internal sealed class DeliverableCompanionContext
 
     internal bool IsCompanion(string normalizedPath)
     {
+        if (IsTestProjectCompanion(normalizedPath))
+        {
+            return true;
+        }
+
         if (IsInterfaceCompanion(normalizedPath))
         {
             return true;
@@ -109,6 +114,42 @@ internal sealed class DeliverableCompanionContext
         }
 
         subject = string.Empty;
+        return false;
+    }
+
+    private bool IsTestProjectCompanion(string normalizedPath)
+    {
+        if (!normalizedPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string? csprojDirectory = Path.GetDirectoryName(normalizedPath)?.Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(csprojDirectory))
+        {
+            return false;
+        }
+
+        foreach (string planned in _plannedPaths)
+        {
+            if (!planned.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string? testDirectory = Path.GetDirectoryName(ArchitectureDeliverableMatcher.NormalizePath(planned))?.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(testDirectory))
+            {
+                continue;
+            }
+
+            if (testDirectory.Equals(csprojDirectory, StringComparison.OrdinalIgnoreCase)
+                || ArchitectureDeliverableMatcher.DirectoryPathsCompatible(testDirectory, csprojDirectory))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 

@@ -14,8 +14,13 @@ sealed class RecoveryAgent : LlmWorkflowAgentBase
 
     protected override string BuildPrompt(WorkflowState state)
     {
+        bool testFocusedRecovery = MissingTestRecoverySupport.ShouldFocusOnMissingTests(state);
+        bool restrictAllowedFiles = RecoveryContextSupport.ShouldRestrictAllowedFilesToBuildErrors(state);
+        string testChecklist = MissingTestRecoverySupport.BuildPromptSection(state);
         string allowedFiles = state.CompilationFixAllowedFiles.Count == 0
-            ? "- none detected from findings (infer paths from RAG/architecture when adding tests)"
+            ? restrictAllowedFiles
+                ? "- none (add NEW test/spec files from Test recovery checklist and RAG; do not return existing production files)"
+                : "- none detected from findings (infer paths from RAG/architecture when adding tests)"
             : string.Join("\n", state.CompilationFixAllowedFiles.Select(path => $"- {path}"));
         string complianceIssues = state.ComplianceIssues.Count > 0
             ? string.Join("\n", state.ComplianceIssues.Select(i => $"- {i}"))
@@ -29,10 +34,12 @@ sealed class RecoveryAgent : LlmWorkflowAgentBase
 
         bool blockingAudit = AuditorAgent.HasBlockingFindings(state.Audit);
         IReadOnlyList<AgentFinding> auditFindings = GetRecoveryAuditFindings(state);
-        string recoveryRules = BuildRecoveryRules(state, blockingAudit);
-        string goal = blockingAudit
-            ? "address blocking audit findings (including missing tests) and fix build errors below. Use minimal, safe edits."
-            : "fix the build errors below so the repository compiles. Use minimal, safe edits.";
+        string recoveryRules = BuildRecoveryRules(state, blockingAudit, testFocusedRecovery);
+        string goal = testFocusedRecovery
+            ? "add every path in the Test recovery checklist (and fix dotnet test / build errors below). Use minimal, safe edits."
+            : blockingAudit
+                ? "address blocking audit findings and fix build errors below. Use minimal, safe edits."
+                : "fix the build errors below so the repository compiles. Use minimal, safe edits.";
 
         string auditSection = blockingAudit
             ? $"""
@@ -65,7 +72,7 @@ Architecture plan (planned paths — implement missing test entries from BACKEND
             ? string.Empty
             : $"""
 
-Files already applied this run:
+Files already applied this run (do not re-return unless Build errors reference the same path):
 {string.Join(", ", state.AppliedFiles)}
 
 """;
@@ -78,17 +85,17 @@ Task:
 
 Repository contract (discovered layout — follow this):
 {contractSummary}
-{ragSection}{architectureSection}{appliedSection}
+{testChecklist}{ragSection}{architectureSection}{appliedSection}
 Exemplar sources (FULL files from this repo — match patterns here; primary reference):
 {exemplarSources}
 {auditSection}
 Build errors (fix every line — compiler output):
 {buildErrors}
 
-Allowed files to edit (build/apply scope — you may still add new test/spec files when audit requires them):
+Allowed files to edit (includes compiler-referenced paths and owning test .csproj when a *Tests.cs file is listed — use these paths exactly, no extra repo-folder prefix):
 {allowedFiles}
 
-Apply rejections (must fix — files were not written to disk; the workflow will retry until these are resolved or attempts are exhausted):
+Apply rejections (must fix — files were not written to disk; when a .csproj was rejected, return it at the exact path from Allowed files or RAG Test project references, not a duplicated folder path):
 {complianceIssues}
 
 Rules:
@@ -106,17 +113,38 @@ IMPORTANT: Return strictly valid JSON with this shape:
 }}";
     }
 
-    private static string BuildRecoveryRules(WorkflowState state, bool blockingAudit)
+    private static string BuildRecoveryRules(WorkflowState state, bool blockingAudit, bool testFocusedRecovery)
     {
         RepoStack stack = RepoStack.From(state);
         var lines = new List<string>();
-        if (blockingAudit)
+        if (testFocusedRecovery)
+        {
+            lines.AddRange(
+            [
+                "This pass is test-focused: implement every path in Test recovery checklist before other edits.",
+                "Copy *Tests.cs paths only from Unified RAG test exemplars (same test project directory and subfolders as exemplar; never production project folders).",
+                "Never create a new test .csproj or test solution folder; update only test projects listed in RAG \"Test project references\".",
+                "Return full content for each new test file; mirror sibling test structure (fixtures, mocks, assertions, using directives).",
+                "Do NOT return production files from Files already applied unless Build errors name that exact path.",
+                "After tests exist on disk, fix any test compile errors named in Build errors (then production only if explicitly referenced).",
+                "When build output says a NuGet type or namespace could not be found, return the exemplar test .csproj from RAG with that PackageReference — the failing *Tests.cs may be in the wrong project folder.",
+                "When build output says a type from a referenced project could not be found, add `using` for the exact namespace from that type's definition in Exemplar sources; copy usings from sibling *Tests.cs when available.",
+                "When build output reports duplicate assembly attributes, remove duplicate [assembly:] / Assembly* attributes from hand-written .cs — never return or edit *.AssemblyInfo.cs or obj/ generated files.",
+                "Never return production files under dotted namespace folders or under the wrong solution-project directory — copy paths from RAG exemplars.",
+                "Always return the owning test .csproj (full file) in files[] together with every *Tests.cs you add or fix.",
+                "Use the test .csproj path exactly as listed in Allowed files or RAG Test project references — never add an extra leading repository folder segment to that path."
+            ]);
+        }
+        else if (blockingAudit)
         {
             lines.AddRange(
             [
                 "When audit findings mention missing tests, add *Tests.cs (backend) or .spec./.test. files (frontend) before other fixes.",
-                "Infer test paths only from Unified RAG exemplars and the architecture plan: copy an existing test file path for the same layer, change only the entity/file name (never invent .Api/.Application project folders).",
+                "Infer test paths only from Unified RAG exemplars and the architecture plan: copy an existing test file path for the same layer, change only the feature/file name (never invent solution project folders not listed in RAG).",
                 "You may return new test files not listed under Allowed files and not yet on disk.",
+                "Do NOT return production files already listed under Files already applied unless Build errors name that exact path — apply will reject other overwrites.",
+                "Return ONLY: (1) new test/spec files for audit, (2) production files explicitly named in Build errors. Omit entity/repository/interface/controller files when build passed.",
+                "Use repo-relative paths from RAG solution projects only — never duplicate the solution folder (wrong: RepoName/RepoName.Repository/...; right: RepoName.Repository/...).",
                 "After missing tests are addressed, fix remaining build errors and apply rejections."
             ]);
         }
@@ -134,15 +162,19 @@ IMPORTANT: Return strictly valid JSON with this shape:
             "Use full repo-relative paths; when duplicate filenames exist, never return a bare filename.",
             "When returning a new controller/repository/test file, place it in the same solution project folder as existing exemplars for that layer — never create a parallel project directory.",
             "If a required fix would modify a protected on-disk contract file, stop and report low confidence in summary instead of forcing a rewrite.",
-            blockingAudit
-                ? "For production code, only overwrite files listed in compiler errors; create missing test/spec files from audit even when not on disk."
+            testFocusedRecovery || blockingAudit
+                ? "For production code, only overwrite files listed in compiler errors; create missing test/spec files from checklist/RAG even when not on disk."
                 : "Only overwrite existing files when that exact path appears in the compiler error list; otherwise change callers/feature code instead.",
             "Workflow: (1) read audit/build findings, (2) identify root cause, (3) mirror RAG patterns, (4) apply minimal fix, (5) stop when confidence is low."
         ]);
 
         if (stack.DotNet)
         {
-            lines.AddRange(CSharpRecoveryPromptSupport.BuildRuleLines());
+            lines.AddRange(CSharpPromptSupport.BuildRecoveryRuleLines());
+            if (testFocusedRecovery || blockingAudit || HasTestPackageCompileErrors(state))
+            {
+                lines.AddRange(TestProjectPackagePromptSupport.BuildRuleLines());
+            }
         }
 
         if (stack.Frontend)
@@ -177,6 +209,27 @@ IMPORTANT: Return strictly valid JSON with this shape:
     private static bool IsCompilerFinding(string message) =>
         message.Contains("error CS", StringComparison.Ordinal)
         || message.Contains(": error ", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasTestPackageCompileErrors(WorkflowState state)
+    {
+        foreach (AgentFinding finding in state.BuildValidation?.Findings ?? Enumerable.Empty<AgentFinding>())
+        {
+            if (!BuildFailureClassifier.ReportsUnresolvedTypeOrNamespace(finding.Message))
+            {
+                continue;
+            }
+
+            foreach (string path in BuildFailureClassifier.CollectSourcePathsFromMessage(finding.Message, state.RepoPath))
+            {
+                if (TestProjectPathSupport.IsTestSourcePath(state.RepoPath, path))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     private static string FormatFindings(IReadOnlyList<AgentFinding> findings) =>
         findings.Count == 0

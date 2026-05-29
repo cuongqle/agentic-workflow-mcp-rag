@@ -14,7 +14,36 @@ public class ArchitectureDeliverableMatcherTests
     }
 
     [Fact]
-    public void IsAllowedDeliverable_accepts_synthesized_test_path_and_index_companion()
+    public void IsStrictArchitectureDeliverable_requires_exact_path()
+    {
+        const string planned = "SinglePageSample.WebAPI/Controllers/TimesheetController.cs";
+
+        Assert.True(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
+            planned,
+            [planned]));
+        Assert.False(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
+            "SinglePageSample/SinglePageSample.WebAPI/Controllers/TimesheetController.cs",
+            [planned]));
+        Assert.False(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
+            "SinglePageSample.Repository/Controllers/TimesheetController.cs",
+            [planned]));
+    }
+
+    [Fact]
+    public void IsStrictArchitectureDeliverable_allows_planned_interface_companion_only()
+    {
+        var allowed = new[] { "SinglePageSample.Repository/TimesheetRepository.cs" };
+
+        Assert.True(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
+            "SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
+            allowed));
+        Assert.False(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
+            "SinglePageSample/SinglePageSample.Repository/Entities/Timesheet.cs",
+            allowed));
+    }
+
+    [Fact]
+    public void IsStrictArchitectureDeliverable_rejects_unlisted_test_path_with_duplicate_prefix()
     {
         var allowed = new[]
         {
@@ -22,44 +51,12 @@ public class ArchitectureDeliverableMatcherTests
             "SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs"
         };
 
-        Assert.True(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
+        Assert.False(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
             "SinglePageSample/SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs",
             allowed));
-        Assert.True(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
-            "SinglePageSample/SinglePageSample.Repository/Indexes/TimesheetIndex.cs",
+        Assert.True(ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(
+            "SinglePageSample.UnitTest/RepositoryTest/TimesheetRepositoryTests.cs",
             allowed));
-        Assert.True(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
-            "SinglePageSample/SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
-            allowed));
-    }
-
-    [Fact]
-    public void IsAllowedDeliverable_uses_repo_contract_path_rules_and_entity_directory()
-    {
-        var contract = new RepoContract
-        {
-            RepoPath = "/tmp",
-            Entity = new EntityConvention(
-                "SinglePageSample.Repository/Entities",
-                "IEntity",
-                "SinglePageSample.Repository/Entities/Company.cs",
-                null),
-            PathRules =
-            [
-                new PathPlacementRule("Index.cs", "SinglePageSample.Repository/Indexes", null)
-            ]
-        };
-
-        var allowed = new[] { "SinglePageSample.Repository/TimesheetRepository.cs" };
-
-        Assert.True(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
-            "SinglePageSample/SinglePageSample.Repository/Entities/Timesheet.cs",
-            allowed,
-            contract));
-        Assert.True(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
-            "SinglePageSample/SinglePageSample.Repository/Indexes/TimesheetIndex.cs",
-            allowed,
-            contract));
     }
 
     [Fact]
@@ -72,12 +69,12 @@ public class ArchitectureDeliverableMatcherTests
     }
 
     [Fact]
-    public void IsAllowedDeliverable_rejects_unrelated_backend_file()
+    public void IsAllowedDeliverable_still_allows_loose_recovery_style_match()
     {
         var allowed = new[] { "SinglePageSample.Repository/TimesheetRepository.cs" };
 
-        Assert.False(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
-            "SinglePageSample/SinglePageSample.WebAPI/Program.cs",
+        Assert.True(ArchitectureDeliverableMatcher.IsAllowedDeliverable(
+            "SinglePageSample/SinglePageSample.Repository/Interfaces/ITimesheetRepository.cs",
             allowed));
     }
 }

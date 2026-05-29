@@ -15,15 +15,19 @@ static class RecoveryContextSupport
         RepoStack stack = RepoStack.From(state);
         stack.WhenDotNet(
             () => PrepareDotNetBackend(state, timelineLabel, options, addTimeline),
-            () => PrepareFromProposedFiles(state));
+            () => PrepareFromProposedFiles(state, timelineLabel, addTimeline));
     }
 
-    private static void PrepareFromProposedFiles(WorkflowState state)
+    private static void PrepareFromProposedFiles(
+        WorkflowState state,
+        string timelineLabel,
+        Action<string> addTimeline)
     {
         state.CompilationFixAllowedFiles = WorkflowFindingRules.GetAllProposedFiles(state)
             .Select(f => f.RelativePath.Replace('\\', '/'))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        RestrictAllowedFilesForTestRecovery(state, timelineLabel, addTimeline);
         state.CompilationFixExemplarContext = string.Empty;
     }
 
@@ -39,6 +43,8 @@ static class RecoveryContextSupport
         }
 
         state.CompilationFixAllowedFiles = CSharpCompilationFixSupport.DetermineAllowedFiles(state);
+        RestrictAllowedFilesForTestRecovery(state, timelineLabel, addTimeline);
+
         var (exemplarContext, attachedPaths, omittedPaths) =
             CSharpCompilationFixSupport.BuildContext(state, options);
         state.CompilationFixExemplarContext = exemplarContext;
@@ -57,5 +63,52 @@ static class RecoveryContextSupport
                 + $"{string.Join(", ", omittedPaths.Take(12))}"
                 + (omittedPaths.Count > 12 ? ", ..." : string.Empty));
         }
+    }
+
+    /// <summary>
+    /// Test-focused / audit-only recovery: trim implementation paths from allowed files so recovery adds tests via prompt checklist + RAG.
+    /// </summary>
+    private static void RestrictAllowedFilesForTestRecovery(
+        WorkflowState state,
+        string timelineLabel,
+        Action<string> addTimeline)
+    {
+        if (!ShouldRestrictAllowedFilesToBuildErrors(state))
+        {
+            return;
+        }
+
+        int before = state.CompilationFixAllowedFiles.Count;
+        state.CompilationFixAllowedFiles = CollectCompilerReferencedPaths(state);
+        string mode = MissingTestRecoverySupport.ShouldFocusOnMissingTests(state)
+            ? "test-focused recovery"
+            : "audit-only recovery";
+        addTimeline(
+            $"{timelineLabel}: {mode} — allowed files trimmed from {before} to "
+            + $"{state.CompilationFixAllowedFiles.Count} (compiler-referenced only; add tests from checklist/RAG).");
+    }
+
+    internal static bool ShouldRestrictAllowedFilesToBuildErrors(WorkflowState state) =>
+        state.Stage == WorkflowStage.Recovering
+        && AuditorAgent.HasBlockingFindings(state.Audit)
+        && (
+            !WorkflowFindingRules.HasActionableBuildFindings(state)
+            || MissingTestRecoverySupport.ShouldFocusOnMissingTests(state));
+
+    internal static List<string> CollectCompilerReferencedPaths(WorkflowState state)
+    {
+        IReadOnlyList<AgentFinding> findings = state.BuildValidation?.Findings is { Count: > 0 } buildFindings
+            ? buildFindings
+            : Array.Empty<AgentFinding>();
+        var paths = BuildFailureClassifier.CollectSourcePathsFromFindings(findings, state.RepoPath);
+        foreach (string issue in state.ComplianceIssues)
+        {
+            foreach (string path in BuildFailureClassifier.CollectSourcePathsFromMessage(issue, state.RepoPath))
+            {
+                paths.Add(path.Replace('\\', '/').TrimStart('/'));
+            }
+        }
+
+        return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
     }
 }

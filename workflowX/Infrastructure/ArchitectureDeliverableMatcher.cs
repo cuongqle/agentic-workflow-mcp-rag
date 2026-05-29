@@ -13,12 +13,42 @@ internal static class ArchitectureDeliverableMatcher
     internal static IReadOnlyList<string> BuildFrontendAllowedPaths(WorkflowState state) =>
         WorkflowFindingRules.GetFrontendPaths(state);
 
+    /// <summary>
+    /// Strict allow-list check for implement stage: exact planned path or planned I* interface companion only.
+    /// </summary>
+    internal static bool IsStrictArchitectureDeliverable(
+        string relativePath,
+        IReadOnlyList<string> allowedPaths,
+        RepoContract? contract = null)
+    {
+        if (allowedPaths.Count == 0)
+        {
+            return true;
+        }
+
+        string normalized = NormalizePath(relativePath);
+        foreach (string allowed in allowedPaths)
+        {
+            if (IsExactPlannedPath(normalized, NormalizePath(allowed)))
+            {
+                return true;
+            }
+        }
+
+        return IsPlannedInterfaceCompanion(normalized, allowedPaths);
+    }
+
     internal static bool IsAllowedDeliverable(
         string relativePath,
         IReadOnlyList<string> allowedPaths,
         RepoContract? contract = null)
     {
         if (allowedPaths.Count == 0)
+        {
+            return true;
+        }
+
+        if (IsStrictArchitectureDeliverable(relativePath, allowedPaths, contract))
         {
             return true;
         }
@@ -34,6 +64,39 @@ internal static class ArchitectureDeliverableMatcher
 
         DeliverableCompanionContext companionContext = DeliverableCompanionContext.Create(contract, allowedPaths);
         return companionContext.IsCompanion(normalized);
+    }
+
+    internal static bool IsExactPlannedPath(string proposed, string planned) =>
+        proposed.Equals(planned, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsPlannedInterfaceCompanion(string normalizedPath, IReadOnlyList<string> allowedPaths)
+    {
+        string fileName = Path.GetFileName(normalizedPath);
+        string extension = Path.GetExtension(fileName);
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        if (!stem.StartsWith('I') || stem.Length <= 1)
+        {
+            return false;
+        }
+
+        string implementationFileName = stem[1..] + extension;
+        foreach (string allowed in allowedPaths)
+        {
+            string allowedFileName = Path.GetFileName(allowed);
+            if (allowedFileName.Equals(implementationFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (allowedFileName.StartsWith("I", StringComparison.Ordinal)
+                && allowedFileName.Length > 1
+                && allowedFileName[1..].Equals(implementationFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static bool PathsMatch(string proposedRelativePath, string requiredPath)

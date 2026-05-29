@@ -90,20 +90,27 @@ sealed class ArchitectureAgent : LlmWorkflowAgentBase
 
             Specify WHAT to build. Implementer agents decide HOW using RAG exemplars — you do not write code.
 
+            Before backendFiles: read "Production source exemplars" and "Solution projects" in RAG. Every backendFiles.path must match a same-kind file already listed there — change only the feature name. Controllers: copy an existing *Controller.cs exemplar path exactly (same WebAPI/host project folder). Do not invent persistence, mapping, store, or migration files when no same-kind exemplar exists. Never prefix paths with an extra repository folder segment.
+
             Rules:
             - Satisfy every acceptance criterion from requirements intake.
             - Use backendFiles only when backend=yes; use frontendFiles only when frontend=yes.
             - Include every file the task requires for each active layer.
             - Paths must be relative to the repository root and include the correct file extension.
             - Do not include source code, stubs, or markdown — JSON only.
-            - For every backendFiles.path: copy an existing exemplar path from RAG for the same layer and change only the file name.
-            - Controllers/repositories/entities/interfaces: same project segment and folder as matching exemplars in RAG.
-            - Tests: use the same project segment as existing *Tests.cs exemplars in RAG.
-            - Use only solution project directory names listed in RAG; never invent folders (no .Api/.Application when the solution has .WebAPI).
-            - Never repeat the top-level repository folder as the project folder.
-            - If no exemplar exists for a layer in RAG, omit that backendFiles entry and state low confidence in summary.
+            {FormatCSharpRules()}
+            {FormatArchitectureTestPlanningRules()}
+            - Plan production paths with the same folder segments as RAG exemplars (one solution-project directory per path); never prefix with an extra copy of the repository or solution root folder.
+            - Never plan AssemblyInfo.cs or generated artifact paths under obj/ or bin/.
+            - If no exemplar exists for a required layer in RAG, omit that backendFiles entry and state low confidence in summary.
 
             {JsonOutputSchema}
             """;
     }
+
+    private static string FormatCSharpRules() =>
+        string.Join("\n", CSharpPromptSupport.BuildArchitectureAgentRuleLines().Select(rule => $"- {rule}"));
+
+    private static string FormatArchitectureTestPlanningRules() =>
+        string.Join("\n", CSharpPromptSupport.BuildArchitectureTestPlanningRuleLines().Select(rule => $"- {rule}"));
 }

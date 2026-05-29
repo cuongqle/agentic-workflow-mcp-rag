@@ -32,6 +32,13 @@ internal static class TestBootstrapContext
         sb.AppendLine("- Use Parse/TryParse only when converting from string input; do not parse values already typed.");
         sb.AppendLine("- If property type is uncertain, inspect the model/entity file first and mirror existing tests; do not guess.");
 
+        sb.AppendLine();
+        sb.AppendLine("Test project reference guidance (PackageReference + ProjectReference):");
+        foreach (string line in TestProjectPackagePromptSupport.BuildRuleLines())
+        {
+            sb.AppendLine($"- {line}");
+        }
+
         return sb.ToString();
     }
 }

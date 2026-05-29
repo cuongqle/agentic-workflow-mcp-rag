@@ -20,7 +20,7 @@ Several behaviors that used to live in deterministic discoverers, apply guards, 
 | `DotNetTestReleasePolicy` / test quarantine | Removed — fix failing tests through recovery prompts; no test-artifact rollback policy |
 | RAG task scoring + ranked exemplar categories (`AppendBackendExemplarCategories`) | Hybrid semantic RAG + solution project directories; agents copy exemplar paths from context |
 | Apply path canonicalization / `CompositionRootMerger` / layer apply guards | Agents emit final paths; apply is pass-through (+ existing scope/overwrite/syntax gates) |
-| `DotNetRepoContractDiscoverer` layer/path rules on contract | `ArchitectureAgent` + `CSharpProjectPlacementPromptSupport` + RAG solution projects |
+| `DotNetRepoContractDiscoverer` layer/path rules on contract | `ArchitectureAgent` + `CSharpPromptSupport` + RAG solution projects |
 | `CodeExemplarContext.AppendDiscoveredExemplars` (task-scored snippets) | Dropped — semantic RAG + agent prompts |
 
 **Still deterministic (not moved to prompts):** `ArchitectureCoverageComplianceRule`, `ArchitectureDeliverableScopeGuard`, `dotnet build` / `dotnet test`, `BuildFailureClassifier`, `CSharpCompilationFixSupport` exemplar files for recovery.
@@ -337,7 +337,7 @@ flowchart TB
 
 **Recovery loop** (compilation fix + auditor recovery) shares the same path:
 
-`RecoveryContextSupport.Prepare` → `RecoveryAgent` → `GeneratedFileApplier` → `RecordNuGetPackageChanges` (DotNet only) → `BuildValidationAgent` → repeat until pass or max attempts.
+`RecoveryContextSupport.Prepare` → `RecoveryAgent` → `GeneratedFileApplier` → `BuildValidationAgent` → repeat until pass or max attempts.
 
 Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilationProblems` — stack-aware actionable build findings plus unresolved apply rejections (not raw finding count).
 
@@ -364,7 +364,7 @@ Unresolved problems are detected by `WorkflowFindingRules.HasUnresolvedCompilati
 | **14** | `BuildValidationAgent`                               | Routes to DotNet and/or Frontend validators; merges results.                                                                                |
 | **15** | `ObserverAgent`                                      | Integration / cross-cutting review.                                                                                                         |
 | **16** | `AuditorAgent`                                       | LLM audit + merged compliance/build findings.                                                                                               |
-| **17** | Recovery loop                                        | Up to `MaxRecoveryAttempts`; `RecoveryAgent` prompt includes blocking audit + RAG for missing tests.                                         |
+| **17** | Recovery loop                                        | Up to `MaxRecoveryAttempts`; test-focused prompt (`MissingTestRecoverySupport`) when `dotnet test` fails or audit flags missing tests.      |
 | **18** | `TestReleasePolicySupport`                           | Merges auditor + compliance + build findings (DotNet test policy is null).                                                                  |
 | **19** | Rollback (conditional)                               | Roll back generated changes when production build still fails after audit/recovery; workflow continues to acceptance gate and finalization. |
 | **20** | `AcceptanceCriteriaGate` + `AcceptanceCriteriaAgent` | Deterministic + LLM validation against requirements; writes acceptance artifacts.                                                           |
@@ -569,7 +569,7 @@ Called before every `RecoveryAgent` invocation.
 ### Apply after recovery
 
 1. `GeneratedFileApplier` writes recovery files (C# guards when `stack.DotNet`).
-2. `RecordNuGetPackageChanges` (DotNet only) — `ProjectPackageAuditor`.
+2. Test NuGet packages (DotNet, prompt-first) — RAG lists sibling test `PackageReference` exemplars; agents update test `.csproj` when generating `*Tests.cs` (no post-apply package sync).
 3. `BuildValidationAgent` runs again.
 
 Build-message parsing for DotNet recovery is centralized in `BuildFailureClassifier` (`PlugIns.DotNet`).
@@ -611,7 +611,7 @@ High/Blocker findings can trigger the recovery loop.
 | Path conventions | PlugIns.Frontend → `FrontendComplianceRules`  | Controllers, indexes, frontend module layout                    |
 | Missing tests    | **Prompt** → `AuditorAgent`, `BackendDeveloperAgent`, `ArchitectureAgent` | `*Tests.cs` per layer when exemplars exist in RAG |
 | File quality     | `GeneratedFileApplier` + `CSharpApplySupport` | Basic C# shape (when `stack.DotNet`)                            |
-| DI / placement   | **Prompt** → `CSharpProjectPlacementPromptSupport`, `CSharpRecoveryPromptSupport`, RAG | Mirror exemplars; append bootstrap registrations |
+| DI / placement   | **Prompt** → `CSharpPromptSupport`, RAG | Mirror exemplars; append bootstrap registrations |
 
 
 ### Production vs test build failures (DotNet)
@@ -650,7 +650,7 @@ workflowX.sln
 │   └── Orchestration/
 │       ├── Stacks/DotNetStackModule.cs
 │       ├── Compliance/DotNetComplianceRules.cs   # empty All[]
-│       └── DotNet/CSharpCompilationFixSupport.*.cs, CSharpProjectPlacementPromptSupport.cs
+│       └── DotNet/CSharpCompilationFixSupport.*.cs, CSharpPromptSupport.cs
 │
 ├── workflowX.PlugIns.Frontend/        # Frontend stack plug-in
 │   ├── FrontendPluginRegistration.cs       # entry: StackModuleRegistry.Register(FrontendStackModule)

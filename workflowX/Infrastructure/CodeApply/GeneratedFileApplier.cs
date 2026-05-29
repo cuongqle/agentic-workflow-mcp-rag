@@ -148,6 +148,14 @@ static class GeneratedFileApplier
             return false;
         }
 
+        if (CSharpAssemblyMetadataGuard.IsAssemblyInfoPath(relativePath))
+        {
+            issue =
+                "Rejected AssemblyInfo.cs — SDK projects auto-generate assembly attributes. "
+                + "Remove [assembly: Assembly*] metadata from generated output.";
+            return false;
+        }
+
         fullPath = Path.GetFullPath(Path.Combine(ctx.RepoPath, relativePath));
         if (!fullPath.StartsWith(ctx.RepoRoot, StringComparison.OrdinalIgnoreCase))
         {

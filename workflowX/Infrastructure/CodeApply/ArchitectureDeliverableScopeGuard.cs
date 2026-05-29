@@ -33,14 +33,14 @@ internal static class ArchitectureDeliverableScopeGuard
             return true;
         }
 
-        if (ArchitectureDeliverableMatcher.IsAllowedDeliverable(relativePath, allowed, state.Contract))
+        if (ArchitectureDeliverableMatcher.IsStrictArchitectureDeliverable(relativePath, allowed, state.Contract))
         {
             return true;
         }
 
         reason =
             $"File '{relativePath}' is not listed in the architecture plan (BACKEND_FILES/FRONTEND_FILES). "
-            + "Return only planned deliverable paths.";
+            + "Return only paths that match the plan exactly (no extra repository or solution folder prefix).";
         return false;
     }
 }

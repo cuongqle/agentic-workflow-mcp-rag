@@ -198,11 +198,6 @@ static partial class CSharpCompilationFixSupport
             score += 30;
         }
 
-        if (relativePath.Contains("/Properties/AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase))
-        {
-            score += 25;
-        }
-
         return score;
     }
 
