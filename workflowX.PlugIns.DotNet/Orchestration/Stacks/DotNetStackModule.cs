@@ -9,7 +9,7 @@ sealed class DotNetStackModule : IStackModule
 
     public bool IsActive(RepoStack stack) => stack.DotNet;
 
-    public IReadOnlyList<IComplianceRule> ComplianceRules => DotNetComplianceRules.All;
+    public IReadOnlyList<IComplianceRule> ComplianceRules { get; } = Array.Empty<IComplianceRule>();
 
     public ITestReleasePolicy? TestReleasePolicy => null;
 }
